@@ -16,16 +16,41 @@ final class AuthStore {
     static let shared = AuthStore()
 
     private(set) var session: String?
+    private(set) var anonToken: String = ""
     var lastError: String?
     var isAuthenticated: Bool { session != nil }
+
+    /// The bearer used for uploads: the signed-in session if present, else the
+    /// anonymous iCloud-Keychain token (zero-login; same Apple ID -> same token
+    /// across devices and reinstalls). Always non-empty.
+    var bearer: String { session ?? anonToken }
 
     /// Where the session is exchanged. Public URL, not a secret.
     private let authURL = URL(string: "https://jianshuo.dev/files/api/auth/apple")!
 
     private let service = "dev.jianshuo.voicedrop"
-    private let account = "session"
+    private let sessionAccount = "session"
+    private let anonAccount = "anon-id"
 
-    private init() { session = keychainLoad() }
+    private init() {
+        session = keychainLoad(account: sessionAccount)
+        anonToken = loadOrCreateAnon()
+    }
+
+    /// A stable per-user secret with no login. Stored in the iCloud-synced
+    /// Keychain, so the same Apple ID recovers the same token on every device.
+    private func loadOrCreateAnon() -> String {
+        if let existing = keychainLoad(account: anonAccount), !existing.isEmpty { return existing }
+        let token = "anon_" + randomHex(32)
+        keychainSave(token, account: anonAccount)
+        return token
+    }
+
+    private func randomHex(_ count: Int) -> String {
+        var bytes = [UInt8](repeating: 0, count: count)
+        _ = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
 
     /// Exchange a Sign-in-with-Apple identity token for a long-lived session JWT.
     /// On success the session is persisted and `isAuthenticated` flips true.
@@ -47,7 +72,7 @@ final class AuthStore {
                 lastError = "登录失败（无效响应）"
                 return
             }
-            keychainSave(token)
+            keychainSave(token, account: sessionAccount)
             session = token
             lastError = nil
         } catch {
@@ -56,13 +81,13 @@ final class AuthStore {
     }
 
     func signOut() {
-        keychainDelete()
+        keychainDelete(account: sessionAccount)
         session = nil
     }
 
     // MARK: - Keychain (synchronizable = iCloud Keychain)
 
-    private func baseQuery() -> [String: Any] {
+    private func baseQuery(_ account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -71,17 +96,17 @@ final class AuthStore {
         ]
     }
 
-    private func keychainSave(_ value: String) {
+    private func keychainSave(_ value: String, account: String) {
         let data = Data(value.utf8)
-        var q = baseQuery()
+        var q = baseQuery(account)
         SecItemDelete(q as CFDictionary)
         q[kSecValueData as String] = data
         q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(q as CFDictionary, nil)
     }
 
-    private func keychainLoad() -> String? {
-        var q = baseQuery()
+    private func keychainLoad(account: String) -> String? {
+        var q = baseQuery(account)
         q[kSecReturnData as String] = kCFBooleanTrue!
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: AnyObject?
@@ -91,7 +116,7 @@ final class AuthStore {
         return s
     }
 
-    private func keychainDelete() {
-        SecItemDelete(baseQuery() as CFDictionary)
+    private func keychainDelete(account: String) {
+        SecItemDelete(baseQuery(account) as CFDictionary)
     }
 }

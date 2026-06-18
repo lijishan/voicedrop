@@ -14,9 +14,10 @@ final class Uploader {
     /// Base URL is public (not a secret), so it's hardcoded.
     private let baseURL = URL(string: "https://jianshuo.dev/files/api")!
 
-    /// Per-user session minted after Sign in with Apple. Uploads land in this
-    /// user's own `users/<sub>/` space — never the shared master namespace.
-    private var token: String { AuthStore.shared.session ?? "" }
+    /// Per-user bearer: the Sign-in-with-Apple session if present, else the
+    /// anonymous iCloud-Keychain token. Uploads land in this user's own
+    /// `users/<id>/` space — never the shared master namespace.
+    private var token: String { AuthStore.shared.bearer }
 
     var hasValidToken: Bool { !token.isEmpty }
 

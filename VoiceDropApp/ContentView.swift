@@ -20,6 +20,11 @@ struct ContentView: View {
     @State private var location = LocationTagger()
     @State private var authStore = AuthStore.shared
     @State private var phase: Phase = .requesting
+
+    // Interim: zero-login via an anonymous iCloud-Keychain token. Flip to true
+    // once Sign in with Apple's App ID capability has propagated on Apple's
+    // servers (the SiwA code below stays wired up and ready).
+    private let requireAppleSignIn = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -177,7 +182,7 @@ struct ContentView: View {
     // MARK: - Flow
 
     private func begin() async {
-        guard authStore.isAuthenticated else { phase = .needsSignIn; return }
+        if requireAppleSignIn && !authStore.isAuthenticated { phase = .needsSignIn; return }
         let granted = await AudioRecorder.ensurePermission()
         guard granted else { phase = .denied; return }
         location.start()                // best-effort, never blocks recording
@@ -226,7 +231,7 @@ struct ContentView: View {
     }
 
     private func drainQueue() async {
-        guard authStore.isAuthenticated, uploader.pendingCount > 0 else { return }
+        guard !authStore.bearer.isEmpty, uploader.pendingCount > 0 else { return }
         _ = await uploader.drainPending()
     }
 
