@@ -89,7 +89,7 @@ struct ContentView: View {
                 .foregroundStyle(.white.opacity(0.55)).font(.callout)
                 .multilineTextAlignment(.center).padding(.horizontal, 44)
             SignInWithAppleButton(.signIn) { request in
-                request.requestedScopes = []        // we only need the identity token
+                request.requestedScopes = [.fullName, .email]
             } onCompletion: { result in
                 handleSignIn(result)
             }
@@ -248,7 +248,13 @@ struct ContentView: View {
                 else { phase = .needsSignIn }
             }
         case .failure(let error):
-            authStore.lastError = error.localizedDescription
+            let ns = error as NSError
+            var parts = ["\(ns.domain) \(ns.code)", ns.localizedDescription]
+            if let reason = ns.localizedFailureReason { parts.append(reason) }
+            if let under = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
+                parts.append("↳ \(under.domain) \(under.code): \(under.localizedDescription)")
+            }
+            authStore.lastError = parts.joined(separator: "\n")
         }
     }
 
