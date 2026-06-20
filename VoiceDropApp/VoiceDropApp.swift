@@ -4,8 +4,7 @@ import SwiftUI
 struct VoiceDropApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .preferredColorScheme(.dark)
+            RootView()
         }
     }
 }

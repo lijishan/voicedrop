@@ -5,7 +5,6 @@ import SwiftUI
 /// is never blocked by this.
 struct LibraryView: View {
     @State private var store = LibraryStore()
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -34,11 +33,6 @@ struct LibraryView: View {
             .background(Color.black.ignoresSafeArea())
             .navigationTitle("我的录音")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }.tint(.white)
-                }
-            }
             .toolbarBackground(Color.black, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
         }
