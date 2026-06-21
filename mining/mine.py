@@ -21,7 +21,7 @@ Env:
   MINE_MODEL             optional, default claude-sonnet-4-6
   MINE_DRY               if set, list what WOULD be mined and exit (no ASR/LLM)
 """
-import os, re, sys, json, time, subprocess, tempfile, urllib.request
+import os, re, sys, json, time, struct, zlib, subprocess, tempfile, urllib.request
 from urllib.parse import quote
 
 
@@ -217,12 +217,63 @@ def md_to_wechat_html(md):
     return '\n'.join(parts)
 
 
-def create_wechat_draft(access_token, title, body_md):
+def _make_placeholder_png(width=500, height=280):
+    """Pure-stdlib grayscale PNG — used as a placeholder cover image."""
+    def _chunk(tag, data):
+        crc = zlib.crc32(tag + data) & 0xffffffff
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', crc)
+    row = b'\x00' + bytes([0x80] * width)   # filter-byte 0 + gray(128) pixels
+    compressed = zlib.compress(row * height, level=1)
+    ihdr = _chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 0, 0, 0, 0))
+    idat = _chunk(b'IDAT', compressed)
+    iend = _chunk(b'IEND', b'')
+    return b'\x89PNG\r\n\x1a\n' + ihdr + idat + iend
+
+
+def _upload_wechat_cover(access_token):
+    """Upload a placeholder PNG as a WeChat permanent image material.
+    Returns the permanent media_id."""
+    png = _make_placeholder_png()
+    boundary = b'VoiceDropBoundary42'
+    part = (b'--' + boundary + b'\r\n'
+            b'Content-Disposition: form-data; name="media"; filename="cover.png"\r\n'
+            b'Content-Type: image/png\r\n\r\n' + png + b'\r\n')
+    body = part + b'--' + boundary + b'--\r\n'
+    raw = _wechat_req(
+        "POST",
+        f"https://api.weixin.qq.com/cgi-bin/material/add_material"
+        f"?access_token={access_token}&type=image",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary.decode()}"},
+    )
+    result = json.loads(raw)
+    if "media_id" not in result:
+        raise RuntimeError(f"WeChat cover upload error: {result}")
+    return result["media_id"]
+
+
+def ensure_wechat_thumb(access_token, wechat_cfg, audio_key):
+    """Return a permanent thumb_media_id, uploading a cover once if needed.
+    Updates WECHAT.json in R2 so the ID is reused on every subsequent draft."""
+    thumb_id = wechat_cfg.get("thumb_media_id", "")
+    if thumb_id:
+        return thumb_id
+    thumb_id = _upload_wechat_cover(access_token)
+    wechat_cfg["thumb_media_id"] = thumb_id
+    parts = audio_key.rsplit("/", 1)
+    prefix = parts[0] + "/" if len(parts) == 2 else ""
+    api_put(prefix + "WECHAT.json",
+            json.dumps(wechat_cfg, ensure_ascii=False).encode(), "application/json")
+    return thumb_id
+
+
+def create_wechat_draft(access_token, title, body_md, thumb_media_id):
     """Create a WeChat draft and return its media_id."""
     content_html = md_to_wechat_html(body_md)
     payload = {
         "articles": [{
             "title": title,
+            "thumb_media_id": thumb_media_id,
             "content": content_html,
             "need_open_comment": 0,
             "only_fans_can_comment": 0,
@@ -498,9 +549,10 @@ def main():
                 if wechat_cfg:
                     try:
                         wx_token = wechat_access_token(wechat_cfg["appid"], wechat_cfg["secret"])
+                        thumb_id = ensure_wechat_thumb(wx_token, wechat_cfg, audio)
                         media_ids = []
                         for a in articles:
-                            mid = create_wechat_draft(wx_token, a["title"], a["body"])
+                            mid = create_wechat_draft(wx_token, a["title"], a["body"], thumb_id)
                             media_ids.append(mid)
                             log(f"   📩 WeChat draft: {a['title']} → {mid}")
                         # Persist media_ids back into the article JSON so we don't re-publish.
