@@ -28,7 +28,7 @@ final class AuthStore {
 
     /// The user-facing identity string — exactly the server's storage prefix
     /// (`users/<anonId>/`). Safe to show and share: it's a one-way hash of the
-    /// secret, not the secret itself. Lets 王建硕 pin "which folder is me".
+    /// secret, not the secret itself. Lets the owner pin "which folder is me".
     var anonId: String {
         let hex = SHA256.hash(data: Data(anonToken.utf8))
             .map { String(format: "%02x", $0) }.joined()

@@ -1,6 +1,6 @@
 # VoiceDrop — 设计文档
 
-> 2026-06-18 · 作者：王建硕 + Claude
+> 2026-06-18 · jianshuo + Claude
 
 ## 一句话
 

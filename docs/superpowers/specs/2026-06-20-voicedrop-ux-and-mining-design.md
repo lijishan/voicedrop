@@ -79,7 +79,7 @@ deleted by any pipeline — only by the user's explicit delete in the app.
 ## Out of scope / non-goals
 
 - No change to the recording/upload race fix (already merged).
-- No change to the v2 article schema or the 王建硕 voice prompt.
+- No change to the v2 article schema or the owner voice prompt.
 - No retry/backoff redesign of ASR or the LLM call — only instrumentation.
 
 ## Verification

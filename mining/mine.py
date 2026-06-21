@@ -2,7 +2,7 @@
 """VoiceDrop server-side miner (v2).
 
 For every VoiceDrop-*.m4a in R2 (jianshuo.dev/files) that has no matching
-article yet:  download -> Volcano ASR (-> SRT) -> Claude (王建硕 voice, split
+article yet:  download -> Volcano ASR (-> SRT) -> Claude (owner voice, split
 into 1+ standalone articles) -> write the result JSON back under the user's
 own prefix at  <prefix>/articles/<stem>.json  (+ a <stem>.srt sidecar) so the
 app can pull it. No WeChat. Idempotent: audio that already has an article JSON
@@ -38,8 +38,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Balanced split: 1+ standalone articles, one per *clearly distinct* topic,
 # leaning to fewer/meatier pieces — not one-per-paragraph. Each article obeys
-# the 王建硕 voice DNA in full.
-SYSTEM = """你是王建硕，在写自己的微信公众号文章。下面给你一段你自己的口述录音转写。把它挖成一篇或多篇可以各自独立发布的公众号文章。
+# the owner's voice DNA in full.
+SYSTEM = """你是这段录音的录制者，在写自己的公众号文章。下面给你一段你自己的口述录音转写。把它挖成一篇或多篇可以各自独立发布的公众号文章。
 
 拆分规则（重要）：
 - 默认尽量合并。只有当转写里明显包含几个互不相关的主题时，才拆成多篇。
