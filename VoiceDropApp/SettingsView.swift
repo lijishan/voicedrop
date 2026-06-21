@@ -134,10 +134,6 @@ struct SettingsView: View {
 
                     Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 6)
 
-                    TokenSection()
-
-                    Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 6)
-
                     field(title: "给 Agent 用") {
                         VStack(alignment: .leading, spacing: 8) {
                             Link(destination: URL(string: "https://jianshuo.dev/voicedrop/agent")!) {
@@ -235,42 +231,3 @@ struct SettingsView: View {
     }
 }
 
-/// Shows the current bearer token so users can paste it into Claude Code's
-/// /voicedrop skill (or any other API client).
-private struct TokenSection: View {
-    @State private var auth = AuthStore.shared
-    @State private var copied = false
-
-    private var token: String { auth.bearer }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("访问令牌").font(.headline).foregroundStyle(.white.opacity(0.85))
-            Text("把下面的令牌交给 Claude Code，就可以通过 /voicedrop 命令访问你的录音和文章。")
-                .font(.caption).foregroundStyle(.white.opacity(0.4))
-            HStack(spacing: 10) {
-                Text(token)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-                Button {
-                    UIPasteboard.general.string = token
-                    copied = true
-                    Task {
-                        try? await Task.sleep(for: .seconds(2))
-                        copied = false
-                    }
-                } label: {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .foregroundStyle(copied ? .green : .white.opacity(0.6))
-                        .frame(width: 36, height: 36)
-                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-                }
-            }
-        }
-    }
-}
