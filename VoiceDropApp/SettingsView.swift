@@ -59,15 +59,25 @@ final class SettingsStore {
         } catch { self.error = error.localizedDescription }
     }
 
-    func articlesPageURL() async -> URL? {
-        guard !token.isEmpty else { return nil }
+    func articlesPageURL() async -> Result<URL, String> {
+        guard !token.isEmpty else { return .failure("未登录") }
         var req = URLRequest(url: base.appending(path: "token").appending(path: "articles"))
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true,
-              let obj = try? JSONDecoder().decode([String: String].self, from: data),
-              let urlStr = obj["url"] else { return nil }
-        return URL(string: urlStr)
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(code) else {
+                let body = String(decoding: data, as: UTF8.self).prefix(80)
+                return .failure("HTTP \(code): \(body)")
+            }
+            guard let obj = try? JSONDecoder().decode([String: String].self, from: data),
+                  let urlStr = obj["url"], let url = URL(string: urlStr) else {
+                return .failure("响应格式错误")
+            }
+            return .success(url)
+        } catch {
+            return .failure(error.localizedDescription)
+        }
     }
 
     func save() async {
@@ -132,7 +142,7 @@ struct SettingsView: View {
     @State private var idCopied = false
     @State private var tokenCopied = false
     @State private var fetchingArticlesLink = false
-    @State private var articlesLinkError = false
+    @State private var articlesLinkError: String? = nil
 
     private var anonId: String { AuthStore.shared.anonId }
     private var anonToken: String { AuthStore.shared.anonToken }
@@ -238,14 +248,16 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Button {
                                 guard !fetchingArticlesLink else { return }
-                                articlesLinkError = false
+                                articlesLinkError = nil
                                 Task {
                                     fetchingArticlesLink = true
                                     defer { fetchingArticlesLink = false }
-                                    if let url = await store.articlesPageURL() {
+                                    switch await store.articlesPageURL() {
+                                    case .success(let url):
+                                        articlesLinkError = nil
                                         await UIApplication.shared.open(url)
-                                    } else {
-                                        articlesLinkError = true
+                                    case .failure(let msg):
+                                        articlesLinkError = msg
                                     }
                                 }
                             } label: {
@@ -263,8 +275,8 @@ struct SettingsView: View {
                                 .padding(12)
                                 .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
                             }
-                            if articlesLinkError {
-                                Text("生成链接失败，请检查网络后重试。")
+                            if let errMsg = articlesLinkError {
+                                Text(errMsg)
                                     .font(.caption).foregroundStyle(.orange)
                             } else {
                                 Text("生成一个 24 小时有效的临时链接，在浏览器里浏览你所有成文的录音。")
