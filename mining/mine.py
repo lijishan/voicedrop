@@ -34,6 +34,11 @@ TOKEN = os.environ["FILES_TOKEN"]
 CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = os.environ.get("MINE_MODEL", "claude-sonnet-4-6")
 DRY = bool(os.environ.get("MINE_DRY"))
+# Transcripts shorter than this are noise (a 1–2s tap, a cough): too thin to
+# become an article without fabrication, and the model replies with prose
+# instead of JSON when fed them. Guard before the LLM so they're marked empty
+# (not retried forever). Env-overridable.
+MIN_CHARS = int(os.environ.get("MINE_MIN_CHARS", "20"))
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Balanced split: 1+ standalone articles, one per *clearly distinct* topic,
@@ -246,14 +251,18 @@ def generate_articles(transcript, claude_md=""):
         "model": MODEL, "max_tokens": 8000, "system": system,
         "messages": [{"role": "user", "content": f"口述转写：\n\n{transcript}"}],
     }
-    raw = _req("POST", "https://api.anthropic.com/v1/messages",
-               data=json.dumps(payload).encode(),
-               headers={"x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01",
-                        "content-type": "application/json"})
-    resp = json.loads(raw)
-    text = "".join(b.get("text", "") for b in resp.get("content", [])
-                   if b.get("type") == "text")
-    arts = _articles_from(text)
+    arts = None
+    for attempt in range(2):  # one retry: a single malformed reply self-heals
+        raw = _req("POST", "https://api.anthropic.com/v1/messages",
+                   data=json.dumps(payload).encode(),
+                   headers={"x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01",
+                            "content-type": "application/json"})
+        resp = json.loads(raw)
+        text = "".join(b.get("text", "") for b in resp.get("content", [])
+                       if b.get("type") == "text")
+        arts = _articles_from(text)
+        if arts is not None:
+            break
     if arts is None:
         raise RuntimeError("LLM did not return parseable JSON")
     if not arts:
@@ -318,6 +327,14 @@ def main():
                     write_empty(audio, "no-speech")
                     empty += 1
                     log(f"   ✗ no-speech → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
+                    continue
+
+                # Too thin to be an article — mark empty and skip the LLM, else
+                # the model returns prose (not JSON) and the file fails forever.
+                if len(transcript.strip()) < MIN_CHARS:
+                    write_empty(audio, "too-short")
+                    empty += 1
+                    log(f"   ✗ too-short ({len(transcript.strip())} chars) → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
                     continue
 
                 claude_md = fetch_claude_md(audio)
