@@ -117,7 +117,7 @@ platform :ios do
     )
 
     app_version = get_version_number(xcodeproj: PROJECT, target: SCHEME)
-    guard_not_in_review
+    guard_not_in_review unless options[:force]
 
     unless options[:skip_build]
       build_num = latest_testflight_build_number(

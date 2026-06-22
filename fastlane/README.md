@@ -31,6 +31,14 @@ Build and upload to TestFlight. Brand-new app: TestFlight only, no App Store sub
 
 One-time: regenerate the App Store signing profile after a capability/entitlement change (e.g. adding Sign in with Apple). Read-write: it re-creates the profile from the App ID's current capabilities and pushes it to the certs repo. Needs MATCH_PASSWORD + git write access.
 
+### ios release
+
+```sh
+[bundle exec] fastlane ios release
+```
+
+App Store: upload metadata + screenshots, then submit the current build for review. git push still only goes to TestFlight; this lane is the deliberate review submit. Use `fastlane release skip_build:true` to reuse the build already on TestFlight.
+
 ----
 
 This README.md is auto-generated and will be re-generated every time [_fastlane_](https://fastlane.tools) is run.
