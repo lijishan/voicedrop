@@ -9,6 +9,7 @@ struct CommunityPost: Decodable, Identifiable, Hashable {
     let firstSharedAt: Double?      // ms epoch
     let updatedAt: Double?
     let count: Int?
+    let mine: Bool?                 // owned by the current user (can un-share)
     var id: String { shareId }
 }
 
@@ -56,6 +57,37 @@ final class CommunityStore {
         do {
             let (_, resp) = try await URLSession.shared.data(for: req)
             return (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true
+        } catch { return false }
+    }
+
+    /// Un-share (delete) one of the user's own community posts. Removed from the
+    /// list immediately (optimistic); reloads if the server rejects it.
+    @discardableResult
+    func unshare(_ shareId: String) async -> Bool {
+        guard !token.isEmpty else { return false }
+        posts.removeAll { $0.shareId == shareId }
+        var req = URLRequest(url: base.appending(path: "community").appending(path: "unshare").appending(path: shareId))
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            let ok = (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true
+            if !ok { await load() }
+            return ok
+        } catch { await load(); return false }
+    }
+
+    /// Whether this article is currently shared to the community (drives the
+    /// 分享 / 更新 menu label).
+    func isShared(_ rec: Recording) async -> Bool {
+        guard !token.isEmpty, rec.hasArticles else { return false }
+        var req = URLRequest(url: base.appending(path: "community").appending(path: "shared").appending(path: rec.articleKey))
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return false }
+            struct R: Decodable { let shared: Bool }
+            return (try? JSONDecoder().decode(R.self, from: data))?.shared ?? false
         } catch { return false }
     }
 

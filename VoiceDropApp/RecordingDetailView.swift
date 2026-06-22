@@ -23,6 +23,8 @@ struct RecordingDetailView: View {
     @State private var toast: String?
     @State private var sharePayload: SharePayload?
     @State private var community = CommunityStore()
+    @State private var published = false            // already has a WeChat draft
+    @State private var sharedToCommunity = false     // already shared to the community
 
     // Live voice editing — persistent push-to-talk bar.
     @State private var agent = ArticleAgentSession()
@@ -57,8 +59,10 @@ struct RecordingDetailView: View {
                 doc = await store.fetchDoc(recording)
             }
             loadingDoc = false
+            published = doc?.hasWechatDraft ?? false
             await settings.loadWechat()
             await connectIfNeeded()
+            if !articles.isEmpty { sharedToCommunity = await community.isShared(recording) }
         }
         .onDisappear { player.stop(); dictation.stop(); agent.disconnect() }
         .sheet(isPresented: $showingWechatSettings, onDismiss: {
@@ -94,10 +98,10 @@ struct RecordingDetailView: View {
             if !articles.isEmpty {
                 Menu {
                     Button { Task { await publishWechatTapped() } } label: {
-                        Label("发布公众号草稿", systemImage: "paperplane")
+                        Label(published ? "更新公众号草稿" : "发布公众号草稿", systemImage: "paperplane")
                     }
                     Button { Task { await shareToCommunity() } } label: {
-                        Label("分享到社区", systemImage: "person.2")
+                        Label(sharedToCommunity ? "更新 VoiceDrop 社区文章" : "分享到 VoiceDrop 社区", systemImage: "person.2")
                     }
                     Button { Task { await share() } } label: {
                         Label("分享", systemImage: "square.and.arrow.up")
@@ -124,8 +128,10 @@ struct RecordingDetailView: View {
     }
 
     private func shareToCommunity() async {
+        let wasShared = sharedToCommunity
         let ok = await community.share(recording)
-        showToast(ok ? "已分享到社区" : "分享失败，请稍后再试")
+        if ok { sharedToCommunity = true }
+        showToast(ok ? (wasShared ? "已更新社区文章" : "已分享到社区") : "分享失败，请稍后再试")
     }
 
     // MARK: Article pane
@@ -370,7 +376,8 @@ struct RecordingDetailView: View {
         publishing = false
         switch result {
         case .ok:
-            showToast("已推送，约 1 分钟后到草稿箱")
+            showToast(published ? "已更新，约 1 分钟后到草稿箱" : "已推送，约 1 分钟后到草稿箱")
+            published = true
         case .notConfigured:
             publishAfterSetup = true
             showingWechatSettings = true

@@ -8,6 +8,7 @@ import AVFoundation
 struct MinedArticle: Decodable, Identifiable {
     let title: String
     let body: String
+    var wechatMediaId: String?      // present once a WeChat draft has been created
     var id: String { title + "\(body.count)" }
 }
 
@@ -29,6 +30,9 @@ struct ArticleDoc: Decodable {
         if let b = body, !b.isEmpty { return [MinedArticle(title: title ?? "(无题)", body: b)] }
         return []
     }
+
+    /// True once any article has a WeChat draft (the menu shows 更新 instead of 发布).
+    var hasWechatDraft: Bool { (articles ?? []).contains { $0.wechatMediaId != nil } }
 }
 
 /// A recording as seen in the user's R2 space: the audio key plus whether the

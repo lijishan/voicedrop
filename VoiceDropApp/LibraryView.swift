@@ -17,6 +17,7 @@ struct LibraryView: View {
     @State private var showSettings = false
     @State private var selectedRec: Recording?
     @State private var selectedPost: CommunityPost?
+    @State private var confirmUnshare: CommunityPost?
     @Environment(\.scenePhase) private var scenePhase
 
     /// Local takes still uploading (shown at the top) + server recordings.
@@ -57,6 +58,12 @@ struct LibraryView: View {
             Button("删除文章并重新生成", role: .destructive) { Task { await store.deleteArticle(rec) } }
             Button("取消", role: .cancel) {}
         } message: { _ in Text("会删掉已生成的文章、保留录音，下个周期重新挖一遍。") }
+        .alert("从社区移除？", isPresented: .init(
+            get: { confirmUnshare != nil }, set: { if !$0 { confirmUnshare = nil } }
+        ), presenting: confirmUnshare) { post in
+            Button("移除", role: .destructive) { Task { await community.unshare(post.shareId) } }
+            Button("取消", role: .cancel) {}
+        } message: { _ in Text("社区里将看不到这篇；你的原文章不受影响，以后还能再分享。") }
     }
 
     private func refresh() async {
@@ -161,6 +168,12 @@ struct LibraryView: View {
                         .buttonStyle(.plain)
                         .listRowBackground(Color.clear).listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 6, trailing: 16))
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if post.mine == true {
+                                Button(role: .destructive) { confirmUnshare = post } label: { Label("取消分享", systemImage: "trash") }
+                                    .tint(.red)
+                            }
+                        }
                 }
             }
             .listStyle(.plain)
