@@ -259,23 +259,6 @@ final class LibraryStore {
         } catch { return false }
     }
 
-    /// Store the user's spoken revision request for this article on the server as
-    /// articles/<stem>.PROMPT.md (overwrites any prior one). Returns true on success.
-    func savePrompt(_ rec: Recording, _ text: String) async -> Bool {
-        guard !token.isEmpty else { return false }
-        let key = "articles/\(rec.stem).PROMPT.md"
-        let enc = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
-        guard let url = URL(string: "\(base.absoluteString)/upload/\(enc)") else { return false }
-        var req = URLRequest(url: url)
-        req.httpMethod = "PUT"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("text/markdown; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        do {
-            let (_, resp) = try await URLSession.shared.upload(for: req, from: Data(text.utf8))
-            return (resp as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } == true
-        } catch { return false }
-    }
-
     /// Download the audio to a temp file for local playback.
     func downloadAudio(_ rec: Recording) async -> URL? {
         do {

@@ -19,8 +19,12 @@ struct RecordingDetailView: View {
     @State private var publishing = false
     @State private var showingWechatSettings = false
     @State private var publishAfterSetup = false        // tapped 发布 before configuring
-    @State private var showingVoiceEdit = false
     @State private var toast: String?
+
+    // Live voice editing (in-place, hold-to-talk → agent rewrites the article).
+    @State private var editing = false
+    @State private var agent = ArticleAgentSession()
+    @State private var dictation = SpeechDictation()
 
     private var articles: [MinedArticle] { doc?.resolvedArticles ?? [] }
 
@@ -55,13 +59,13 @@ struct RecordingDetailView: View {
                         } label: { Label("发布微信公众号草稿", systemImage: "paperplane") }
 
                         Button {
-                            showingVoiceEdit = true
+                            startEditing()
                         } label: { Label("编辑", systemImage: "mic") }
                     } label: {
                         if publishing { ProgressView().tint(.white) }
                         else { Image(systemName: "ellipsis") }
                     }
-                    .disabled(publishing)
+                    .disabled(publishing || editing)
                     .accessibilityLabel("更多")
                 }
             }
@@ -83,14 +87,103 @@ struct RecordingDetailView: View {
                 if settings.wechatConfigured { Task { await sendWechat() } }
             }
         }) { WechatSettingsSheet(store: settings) }
-        .sheet(isPresented: $showingVoiceEdit) {
-            VoiceEditSheet { text in
-                let ok = await store.savePrompt(recording, text)
-                if ok { showToast("已发送修改要求到服务器") }
-                return ok
+        .overlay(alignment: .bottom) { if editing { editBar } }
+        .overlay(alignment: .bottom) { toastView }
+        .onDisappear { if editing { endEditing() } }
+    }
+
+    // MARK: Voice editing
+
+    /// Enter editing mode: open the agent socket and ask for mic/speech access.
+    private func startEditing() {
+        editing = true
+        agent.onUpdate = { newDoc in
+            doc = newDoc
+            articleIndex = min(articleIndex, max(0, (newDoc.resolvedArticles.count) - 1))
+        }
+        agent.connect(recording)
+        Task { await dictation.requestAuth() }
+    }
+
+    private func endEditing() {
+        dictation.stop()
+        agent.disconnect()
+        editing = false
+    }
+
+    /// Bottom hold-to-talk bar (WeChat 按住说话 style). Press and hold the mic to
+    /// dictate; release to send the instruction to the agent, which rewrites the
+    /// article in place. Keep talking until satisfied; 完成 ends the session.
+    private var editBar: some View {
+        let busy = agent.state == .working
+        return VStack(spacing: 10) {
+            // Live transcript bubble while speaking.
+            if dictation.isRecording && !dictation.transcript.isEmpty {
+                Text(dictation.transcript)
+                    .font(.callout).foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 20)
+            }
+
+            HStack(spacing: 14) {
+                Button { endEditing() } label: {
+                    Text("完成").font(.callout.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+
+                // Hold-to-talk pill.
+                Text(holdLabel(busy: busy))
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        dictation.isRecording ? Color.red.opacity(0.55) : Color.white.opacity(0.12),
+                        in: Capsule()
+                    )
+                    .overlay {
+                        if busy { ProgressView().tint(.white) }
+                        else { Image(systemName: dictation.isRecording ? "waveform" : "mic.fill")
+                            .foregroundStyle(.white).opacity(0.9)
+                            .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 18) }
+                    }
+                    .contentShape(Capsule())
+                    .gesture(holdGesture(disabled: busy || dictation.authorized != true))
+            }
+            .padding(.horizontal, 20)
+
+            if let e = agent.error ?? dictation.error {
+                Text(e).font(.caption).foregroundStyle(.orange)
             }
         }
-        .overlay(alignment: .bottom) { toastView }
+        .padding(.vertical, 14)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .padding(.horizontal, 8).padding(.bottom, 6)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private func holdLabel(busy: Bool) -> String {
+        if busy { return "正在修改…" }
+        if dictation.authorized != true { return "需要麦克风权限" }
+        return dictation.isRecording ? "松开发送" : "按住说出修改要求"
+    }
+
+    /// Press-and-hold: start dictation on press, send transcript on release.
+    private func holdGesture(disabled: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { _ in
+                guard !disabled, !dictation.isRecording else { return }
+                dictation.start()
+            }
+            .onEnded { _ in
+                guard dictation.isRecording else { return }
+                dictation.stop()
+                let text = dictation.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { agent.send(text) }
+            }
     }
 
     // MARK: Three-dots actions
