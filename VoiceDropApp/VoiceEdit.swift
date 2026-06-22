@@ -18,15 +18,21 @@ final class SpeechDictation {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
 
-    /// Ask for speech + mic permission. Sets `authorized`.
+    /// Ask for speech + mic permission. Sets `authorized`. The speech callback is
+    /// run via a NON-isolated helper: SFSpeechRecognizer delivers it on a background
+    /// queue, and a main-actor-isolated closure would trap under Swift 6.
     func requestAuth() async {
-        let speech = await withCheckedContinuation { (c: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
-            SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) }
-        }
+        let speech = await Self.requestSpeechAuth()
         let mic = await AVAudioApplication.requestRecordPermission()
         let ok = speech == .authorized && mic
         authorized = ok
         if !ok { error = "需要在设置里允许语音识别和麦克风权限。" }
+    }
+
+    nonisolated private static func requestSpeechAuth() async -> SFSpeechRecognizerAuthorizationStatus {
+        await withCheckedContinuation { cont in
+            SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
+        }
     }
 
     func start() {
@@ -44,20 +50,28 @@ final class SpeechDictation {
 
             let input = engine.inputNode
             let format = input.outputFormat(forBus: 0)
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buf, _ in
-                self?.request?.append(buf)
+            // The tap fires on the realtime audio thread; the result handler on a
+            // Speech background queue. Both are @Sendable so they DON'T inherit this
+            // class's @MainActor isolation (which would trap off-main under Swift 6).
+            nonisolated(unsafe) let tapReq = req
+            let tap: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { buffer, _ in
+                tapReq.append(buffer)
             }
+            input.installTap(onBus: 0, bufferSize: 1024, format: format, block: tap)
             engine.prepare()
             try engine.start()
             isRecording = true
 
-            task = recognizer.recognitionTask(with: req) { [weak self] result, err in
+            let resultHandler: @Sendable (SFSpeechRecognitionResult?, Error?) -> Void = { [weak self] result, err in
+                let text = result?.bestTranscription.formattedString   // String? — Sendable
+                let done = err != nil || (result?.isFinal ?? false)
                 Task { @MainActor in
                     guard let self else { return }
-                    if let result { self.transcript = result.bestTranscription.formattedString }
-                    if err != nil || (result?.isFinal ?? false) { self.stop() }
+                    if let text { self.transcript = text }
+                    if done { self.stop() }
                 }
             }
+            task = recognizer.recognitionTask(with: req, resultHandler: resultHandler)
         } catch {
             self.error = error.localizedDescription
             stop()
