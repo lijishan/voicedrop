@@ -48,6 +48,18 @@ final class Uploader {
 
     func refreshPending() { pendingCount = pendingFiles().count }
 
+    /// Move an uploaded take out of the pending scan but keep it on disk
+    /// (Documents/uploaded/) — used when "上传后删除本地" is off.
+    static func keepLocal(_ url: URL) {
+        let dir = documentsDir.appending(path: "uploaded")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appending(path: url.lastPathComponent)
+        try? FileManager.default.removeItem(at: dest)
+        try? FileManager.default.moveItem(at: url, to: dest)
+    }
+
+    private static var documentsDir: URL { AudioRecorder.documentsDir }
+
     // MARK: - Upload
 
     /// Uploads one file. Returns true and deletes the file on success.
@@ -81,7 +93,13 @@ final class Uploader {
                     : "上传失败 HTTP \(http.statusCode)"
                 return false
             }
-            try? FileManager.default.removeItem(at: url)
+            // Drop from the queue. If the user wants a local copy kept, move it
+            // into an `uploaded/` subdir (outside the VoiceDrop-* scan) instead.
+            if Prefs.shared.deleteLocalAfterUpload {
+                try? FileManager.default.removeItem(at: url)
+            } else {
+                Self.keepLocal(url)
+            }
             lastError = nil
             refreshPending()
             return true

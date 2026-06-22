@@ -71,14 +71,8 @@ final class AudioRecorder {
 
         let now = Date()
         let url = Self.stagingURL(start: now)
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44_100,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
-            AVEncoderBitRateKey: 64_000,
-        ]
-        let rec = try AVAudioRecorder(url: url, settings: settings)
+        // Encoder settings follow the user's 录音质量 pref (标准 64k / 高 96k).
+        let rec = try AVAudioRecorder(url: url, settings: Prefs.shared.recorderSettings)
         guard rec.record() else { throw RecorderError.couldNotStart }
 
         recorder = rec

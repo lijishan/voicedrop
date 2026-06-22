@@ -1,0 +1,174 @@
+import SwiftUI
+import Observation
+import AVFoundation
+
+// MARK: - Color(hex:)
+
+extension Color {
+    init(hex: String) {
+        let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        var int: UInt64 = 0
+        Scanner(string: h).scanHexInt64(&int)
+        let r = Double((int >> 16) & 0xff) / 255
+        let g = Double((int >> 8) & 0xff) / 255
+        let b = Double(int & 0xff) / 255
+        self.init(.sRGB, red: r, green: g, blue: b, opacity: 1)
+    }
+}
+
+// MARK: - Design tokens ("暖纸 · Warm Paper（硬朗）")
+
+enum Theme {
+    // Backgrounds
+    static let appBG          = Color(hex: "FAF6EF")   // 录音 / 列表 / 设置 chrome
+    static let readBG         = Color(hex: "F0EDE7")   // 成文阅读专用暖灰
+    static let card           = Color.white
+
+    // Borders / dividers
+    static let borderChrome   = Color(hex: "ECE3D5")
+    static let borderRead     = Color(hex: "E5DFD5")
+    static let dividerInCard  = Color(hex: "F0E8DA")
+    static let inputBorder    = Color(hex: "E2D8C8")   // 1.5px
+
+    // Text
+    static let ink            = Color(hex: "2A2521")   // 标题（米色底）
+    static let inkRead        = Color(hex: "2B2823")   // 标题（暖灰底）
+    static let bodyInk        = Color(hex: "4A443C")   // 正文（米色）
+    static let bodyRead       = Color(hex: "494339")   // 正文（暖灰）
+    static let secondary      = Color(hex: "8A8175")
+    static let faint          = Color(hex: "B8AE9E")
+    static let metaChrome     = Color(hex: "A89E8E")
+    static let metaRead       = Color(hex: "9A9387")
+    static let sectionLabel   = Color(hex: "A79F93")
+    static let chevron        = Color(hex: "CFC6B6")
+
+    // Accent / status
+    static let accent         = Color(hex: "D8593B")   // 赭红
+    static let accentSoft     = Color(hex: "F6E4DC")
+    static let greenDone      = Color(hex: "5E8A6A")
+    static let amberPending   = Color(hex: "C98A3C")
+
+    // WeChat connected banner
+    static let okBannerBG     = Color(hex: "EAF1EC")
+    static let okBannerBorder = Color(hex: "D5E3D9")
+    static let okBannerTitle  = Color(hex: "3C5A47")
+    static let okBannerSub    = Color(hex: "6E8576")
+
+    // Icon tiles
+    static let tileNeutral    = Color(hex: "F1ECE3")
+    static let inkTile        = Color(hex: "2A2521")
+    static let tileWarm       = Color(hex: "F6EFE3")   // waveform tile bg
+
+    // Radii
+    enum R {
+        static let card: CGFloat = 5
+        static let player: CGFloat = 6
+        static let chip: CGFloat = 4
+        static let input: CGFloat = 4
+        static let nav: CGFloat = 10
+        static let recordOuter: CGFloat = 10
+        static let recordInner: CGFloat = 6
+        static let primary: CGFloat = 8
+        static let tile: CGFloat = 8
+    }
+}
+
+// MARK: - Shadows (CSS blur ≈ SwiftUI radius / 2)
+
+extension View {
+    func cardChromeShadow() -> some View {
+        shadow(color: Color(.sRGB, red: 180/255, green: 140/255, blue: 100/255, opacity: 0.09), radius: 4, x: 0, y: 2)
+    }
+    func cardReadShadow() -> some View {
+        shadow(color: Color(.sRGB, red: 120/255, green: 110/255, blue: 90/255, opacity: 0.07), radius: 4, x: 0, y: 2)
+    }
+    func navButtonShadow() -> some View {
+        shadow(color: .black.opacity(0.04), radius: 3, x: 0, y: 2)
+    }
+    func accentButtonShadow() -> some View {
+        shadow(color: Color(.sRGB, red: 216/255, green: 89/255, blue: 59/255, opacity: 0.28), radius: 6, x: 0, y: 4)
+    }
+}
+
+// MARK: - Reusable bits
+
+/// Five ochre rounded bars — the VoiceDrop motif (brand mark, list tile).
+struct WaveformBars: View {
+    var color: Color = Theme.accent
+    var heights: [CGFloat] = [11, 20, 26, 16, 9]
+    var barWidth: CGFloat = 3
+    var spacing: CGFloat = 2.5
+
+    var body: some View {
+        HStack(alignment: .center, spacing: spacing) {
+            ForEach(Array(heights.enumerated()), id: \.offset) { _, h in
+                RoundedRectangle(cornerRadius: barWidth / 2)
+                    .fill(color)
+                    .frame(width: barWidth, height: h)
+            }
+        }
+    }
+}
+
+/// A 38×38 (configurable) white rounded-square chrome button (back, gear, share).
+struct NavSquare: View {
+    var systemName: String
+    var size: CGFloat = 38
+    var stroke: Color = Color(hex: "6F685D")
+    var border: Color = Theme.borderChrome
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            RoundedRectangle(cornerRadius: Theme.R.nav)
+                .fill(Theme.card)
+                .overlay(RoundedRectangle(cornerRadius: Theme.R.nav).stroke(border, lineWidth: 1))
+                .overlay(Image(systemName: systemName).font(.system(size: size * 0.42, weight: .regular)).foregroundStyle(stroke))
+                .frame(width: size, height: size)
+                .navButtonShadow()
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - User preferences (wired to real behavior)
+
+/// Lightweight UserDefaults-backed prefs surfaced in Settings. These do change
+/// behavior (the one deliberate logic touch): iCloud backup, keep-local-after-
+/// upload, and recording quality.
+@MainActor
+@Observable
+final class Prefs {
+    static let shared = Prefs()
+    private let d = UserDefaults.standard
+
+    var iCloudBackup: Bool { didSet { d.set(iCloudBackup, forKey: "pref.iCloudBackup") } }
+    var deleteLocalAfterUpload: Bool { didSet { d.set(deleteLocalAfterUpload, forKey: "pref.deleteLocal") } }
+    var highQuality: Bool { didSet { d.set(highQuality, forKey: "pref.highQuality") } }
+
+    private init() {
+        iCloudBackup = d.object(forKey: "pref.iCloudBackup") as? Bool ?? true
+        deleteLocalAfterUpload = d.object(forKey: "pref.deleteLocal") as? Bool ?? true
+        highQuality = d.object(forKey: "pref.highQuality") as? Bool ?? false
+    }
+
+    /// AVAudioRecorder settings for the chosen quality. 标准 = the original 64 kbps;
+    /// 高 = 96 kbps / high.
+    nonisolated var recorderSettings: [String: Any] {
+        let high = UserDefaults.standard.object(forKey: "pref.highQuality") as? Bool ?? false
+        return [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 44_100,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: (high ? AVAudioQuality.high : .medium).rawValue,
+            AVEncoderBitRateKey: high ? 96_000 : 64_000,
+        ]
+    }
+
+    var qualityLabel: String { highQuality ? "高 · AAC" : "标准 · AAC" }
+
+    /// The app version string for the Settings "版本" row.
+    static var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
+    }
+}

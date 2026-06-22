@@ -95,6 +95,15 @@ final class AuthStore {
         session = nil
     }
 
+    /// Reset the anonymous identity: mint a brand-new token. The old
+    /// `users/<id>/` space (recordings + articles) becomes unreachable — this is
+    /// irreversible. Used by the account page's 重置身份.
+    func resetAnonymous() {
+        let token = "anon_" + randomHex(32)
+        keychainSave(token, account: anonAccount)
+        anonToken = token
+    }
+
     // MARK: - Keychain (synchronizable = iCloud Keychain)
 
     private func baseQuery(_ account: String) -> [String: Any] {
