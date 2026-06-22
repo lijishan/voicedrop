@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// Record-first navigation: the record screen is the root. Settings is pushed
-/// from the top-right gear; "我的录音" pulls up as a sheet. No tab bar.
+/// List-first navigation (方案二): 我的录音 is the root. Settings pushes from the
+/// gear; the red record key opens a full-screen recording takeover. No tab bar.
 struct RootView: View {
     var body: some View {
         NavigationStack {
-            ContentView()
+            LibraryView()
         }
         .tint(Theme.accent)
         .preferredColorScheme(.light)

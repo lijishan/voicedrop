@@ -1,35 +1,32 @@
 import SwiftUI
 
-/// "我的录音" — pulled up as a sheet from the record screen. White-card list of
-/// recordings + their mining status. Warm-paper light theme.
+/// 「我的录音」— the app's home (方案二). White-card list of recordings; a docked
+/// pure-red record key at the bottom opens the full-screen recording takeover;
+/// the gear pushes Settings. Pulls fresh data on appear and drains any pending
+/// local uploads.
 struct LibraryView: View {
-    var active: Bool = true
-
     @State private var store = LibraryStore()
+    @State private var uploader = Uploader()
     @State private var confirmDelete: Recording?
-    @State private var confirmReprocess: Recording?   // long-press 已成文
-
-    private var minedCount: Int { store.recordings.filter(\.hasArticles).count }
-    private var subtitle: String { "共 \(store.recordings.count) 条 · \(minedCount) 篇已成文" }
+    @State private var confirmReprocess: Recording?
+    @State private var showRecord = false
+    @State private var showSettings = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("我的录音").font(.system(size: 30, weight: .semibold)).foregroundStyle(Theme.ink)
-                    Text(subtitle).font(.system(size: 14)).foregroundStyle(Theme.metaChrome)
-                }
-                .padding(.top, 26).padding(.horizontal, 24).padding(.bottom, 14)
-
-                content
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Theme.appBG.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
+        VStack(spacing: 0) {
+            topBar
+            content
+            recordDock
         }
-        .tint(Theme.accent)
-        .task { await store.load() }
-        .onChange(of: active) { _, nowActive in if nowActive { Task { await store.load() } } }
+        .background(Theme.appBG.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationDestination(isPresented: $showSettings) { SettingsView() }
+        .fullScreenCover(isPresented: $showRecord) {
+            RecordSession { showRecord = false; Task { await refresh() } }
+        }
+        .task { await refresh() }
+        .onChange(of: scenePhase) { _, p in if p == .active { Task { await refresh() } } }
         .alert("删除这条录音？", isPresented: .init(
             get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }
         ), presenting: confirmDelete) { rec in
@@ -44,13 +41,38 @@ struct LibraryView: View {
         } message: { _ in Text("会删掉已生成的文章、保留录音，下个周期重新挖一遍。") }
     }
 
+    private func refresh() async {
+        await store.load()
+        uploader.refreshPending()
+        if uploader.pendingCount > 0 { _ = await uploader.drainPending(); await store.load() }
+    }
+
+    // MARK: Top bar
+
+    private var topBar: some View {
+        HStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 8) {
+                    WaveformBars(color: Theme.recordRed, heights: [6, 12, 16, 8], barWidth: 3, spacing: 2.5)
+                    Text("VoiceDrop 口述").font(.system(size: 14, weight: .semibold)).tracking(1).foregroundStyle(Theme.ink)
+                }
+                Text("我的录音").font(.system(size: 27, weight: .semibold)).foregroundStyle(Theme.ink)
+            }
+            Spacer()
+            NavSquare(systemName: "gearshape") { showSettings = true }.accessibilityLabel("设置")
+        }
+        .padding(.top, 62).padding(.horizontal, 22).padding(.bottom, 12)
+    }
+
+    // MARK: List
+
     @ViewBuilder private var content: some View {
         if store.loading && store.recordings.isEmpty {
-            Spacer(); ProgressView().tint(Theme.accent).frame(maxWidth: .infinity); Spacer()
+            Spacer(); ProgressView().tint(Theme.recordRed); Spacer()
         } else if let err = store.error, store.recordings.isEmpty {
             Spacer(); message("加载失败", err); Spacer()
         } else if store.recordings.isEmpty {
-            Spacer(); message("还没有录音", "录一条，过会儿服务器会自动转写并挖成文章。"); Spacer()
+            Spacer(); message("还没有录音", "点下面的红键录一条，过会儿服务器会自动转写并挖成文章。"); Spacer()
         } else {
             List {
                 ForEach(store.recordings) { rec in
@@ -61,7 +83,7 @@ struct LibraryView: View {
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 6, trailing: 16))
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(role: .destructive) { confirmDelete = rec } label: { Label("删除", systemImage: "trash") }
                             .tint(.red)
@@ -70,23 +92,23 @@ struct LibraryView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .refreshable { await store.load() }
+            .refreshable { await refresh() }
         }
     }
 
     private func rowCard(_ rec: Recording) -> some View {
         let empty = rec.isEmpty
-        return HStack(spacing: 14) {
+        return HStack(spacing: 13) {
             RoundedRectangle(cornerRadius: Theme.R.card)
-                .fill(empty ? Color(hex: "F1ECE3") : Theme.tileWarm)
-                .frame(width: 44, height: 44)
-                .overlay(WaveformBars(color: empty ? Color(hex: "C3B9A8") : Theme.accent,
-                                      heights: [8, 16, 26, 14, 9], barWidth: 3, spacing: 2.5))
+                .fill(empty ? Color(hex: "F1ECE3") : Theme.recordRedSoft)
+                .frame(width: 42, height: 42)
+                .overlay(WaveformBars(color: empty ? Color(hex: "C3B9A8") : Theme.recordRed,
+                                      heights: [11, 19, 14], barWidth: 3, spacing: 2.5))
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(rec.displayTitle).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
                     .lineLimit(1).truncationMode(.tail)
-                HStack(spacing: 10) {
+                HStack(spacing: 9) {
                     if let d = rec.durationLabel {
                         Text(d).font(.system(size: 13).monospacedDigit()).foregroundStyle(Theme.metaChrome)
                     }
@@ -96,7 +118,7 @@ struct LibraryView: View {
             Spacer(minLength: 6)
             Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.chevron)
         }
-        .padding(.vertical, 15).padding(.horizontal, 16)
+        .padding(.vertical, 14).padding(.horizontal, 15)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: Theme.R.card))
         .overlay(RoundedRectangle(cornerRadius: Theme.R.card).stroke(Theme.borderChrome, lineWidth: 1))
         .cardChromeShadow()
@@ -105,19 +127,19 @@ struct LibraryView: View {
 
     @ViewBuilder private func statusBadge(_ rec: Recording) -> some View {
         if rec.hasArticles {
-            badge(dot: Theme.greenDone, text: "已成文", color: Theme.greenDone)
+            badge(Theme.greenDone, "已成文")
                 .contentShape(Rectangle())
                 .onLongPressGesture { confirmReprocess = rec }
         } else if rec.isEmpty {
-            badge(dot: Theme.faint, text: "无语音", color: Theme.faint)
+            badge(Theme.faint, "无语音")
         } else {
-            badge(dot: Theme.amberPending, text: "待处理", color: Theme.amberPending)
+            badge(Theme.amberPending, "待处理")
         }
     }
 
-    private func badge(dot: Color, text: String, color: Color) -> some View {
+    private func badge(_ color: Color, _ text: String) -> some View {
         HStack(spacing: 5) {
-            Circle().fill(dot).frame(width: 6, height: 6)
+            Circle().fill(color).frame(width: 6, height: 6)
             Text(text).font(.system(size: 12.5)).foregroundStyle(color)
         }
     }
@@ -129,5 +151,27 @@ struct LibraryView: View {
                 .multilineTextAlignment(.center).padding(.horizontal, 40)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    // MARK: Record dock
+
+    private var recordDock: some View {
+        VStack(spacing: 7) {
+            Button { showRecord = true } label: {
+                Circle().fill(Theme.card).frame(width: 66, height: 66)
+                    .overlay(Circle().stroke(Color(hex: "E8DECF"), lineWidth: 1))
+                    .overlay(
+                        Circle().fill(Theme.recordRed).frame(width: 54, height: 54)
+                            .shadow(color: Color(.sRGB, red: 229/255, green: 57/255, blue: 46/255, opacity: 0.40), radius: 4, x: 0, y: 2)
+                    )
+                    .shadow(color: .black.opacity(0.06), radius: 7, x: 0, y: 4)
+            }
+            .buttonStyle(.plain).accessibilityLabel("录音")
+            Text("轻点录音").font(.system(size: 12)).tracking(1).foregroundStyle(Theme.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 14).padding(.bottom, 26)
+        .background(Theme.appBG)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.borderChrome).frame(height: 1) }
     }
 }

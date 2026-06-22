@@ -43,8 +43,10 @@ enum Theme {
     static let chevron        = Color(hex: "CFC6B6")
 
     // Accent / status
-    static let accent         = Color(hex: "D8593B")   // 赭红
+    static let accent         = Color(hex: "D8593B")   // 赭红（发布 / chip / 设置）
     static let accentSoft     = Color(hex: "F6E4DC")
+    static let recordRed      = Color(hex: "E5392E")   // 纯红：录音键 / 声波 / 列表波形
+    static let recordRedSoft  = Color(hex: "FBEAE7")   // 列表波形块底
     static let greenDone      = Color(hex: "5E8A6A")
     static let amberPending   = Color(hex: "C98A3C")
 

@@ -29,6 +29,7 @@ final class AudioRecorder {
 
     private(set) var isRecording = false
     private(set) var elapsed: TimeInterval = 0
+    private(set) var level: Double = 0       // 0…1 live input level (for the waveform)
 
     private var recorder: AVAudioRecorder?
     private var currentURL: URL?
@@ -73,6 +74,7 @@ final class AudioRecorder {
         let url = Self.stagingURL(start: now)
         // Encoder settings follow the user's 录音质量 pref (标准 64k / 高 96k).
         let rec = try AVAudioRecorder(url: url, settings: Prefs.shared.recorderSettings)
+        rec.isMeteringEnabled = true
         guard rec.record() else { throw RecorderError.couldNotStart }
 
         recorder = rec
@@ -91,6 +93,7 @@ final class AudioRecorder {
         recorder = nil
         stopTicking()
         isRecording = false
+        level = 0
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         let take = Recording(url: url, start: start, duration: elapsed)
         currentURL = nil
@@ -119,8 +122,14 @@ final class AudioRecorder {
         let start = startDate ?? Date()
         tickTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(200))
-                self?.elapsed = Date().timeIntervalSince(start)
+                try? await Task.sleep(for: .milliseconds(100))
+                guard let self else { return }
+                self.elapsed = Date().timeIntervalSince(start)
+                if let r = self.recorder {
+                    r.updateMeters()
+                    let db = r.averagePower(forChannel: 0)        // ~ -60…0 dBFS
+                    self.level = Double(max(0, min(1, (db + 50) / 50)))
+                }
             }
         }
     }
