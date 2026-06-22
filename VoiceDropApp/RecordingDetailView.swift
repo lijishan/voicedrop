@@ -22,6 +22,7 @@ struct RecordingDetailView: View {
     @State private var publishAfterSetup = false
     @State private var toast: String?
     @State private var sharePayload: SharePayload?
+    @State private var community = CommunityStore()
 
     // Live voice editing — persistent push-to-talk bar.
     @State private var agent = ArticleAgentSession()
@@ -95,6 +96,9 @@ struct RecordingDetailView: View {
                     Button { Task { await publishWechatTapped() } } label: {
                         Label("发布公众号草稿", systemImage: "paperplane")
                     }
+                    Button { Task { await shareToCommunity() } } label: {
+                        Label("分享到社区", systemImage: "person.2")
+                    }
                     Button { Task { await share() } } label: {
                         Label("分享", systemImage: "square.and.arrow.up")
                     }
@@ -117,6 +121,11 @@ struct RecordingDetailView: View {
     private func share() async {
         if let u = await store.shareURL(recording) { sharePayload = SharePayload(text: u.absoluteString) }
         else { showToast("生成分享链接失败") }
+    }
+
+    private func shareToCommunity() async {
+        let ok = await community.share(recording)
+        showToast(ok ? "已分享到社区" : "分享失败，请稍后再试")
     }
 
     // MARK: Article pane

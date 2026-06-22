@@ -4,14 +4,19 @@ import SwiftUI
 /// pure-red record key at the bottom opens the full-screen recording takeover;
 /// the gear pushes Settings. Pulls fresh data on appear and drains any pending
 /// local uploads.
+enum HomeTab { case recordings, community }
+
 struct LibraryView: View {
     @State private var store = LibraryStore()
     @State private var uploader = Uploader()
+    @State private var community = CommunityStore()
+    @State private var tab: HomeTab = .recordings
     @State private var confirmDelete: Recording?
     @State private var confirmReprocess: Recording?
     @State private var showRecord = false
     @State private var showSettings = false
     @State private var selectedRec: Recording?
+    @State private var selectedPost: CommunityPost?
     @Environment(\.scenePhase) private var scenePhase
 
     /// Local takes still uploading (shown at the top) + server recordings.
@@ -26,12 +31,14 @@ struct LibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            content
+            tabHeader
+            if tab == .recordings { recordingsContent } else { communityContent }
         }
         .background(Theme.appBG.ignoresSafeArea())
-        .overlay(alignment: .bottom) { recordButton }
+        .overlay(alignment: .bottom) { if tab == .recordings { recordButton } }
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $selectedRec) { rec in RecordingDetailView(store: store, recording: rec) }
+        .navigationDestination(item: $selectedPost) { post in CommunityPostView(store: community, post: post) }
         .navigationDestination(isPresented: $showSettings) { SettingsView() }
         .fullScreenCover(isPresented: $showRecord) {
             RecordSession { showRecord = false; Task { await refresh() } }
@@ -61,23 +68,47 @@ struct LibraryView: View {
     // MARK: Top bar
 
     private var topBar: some View {
-        HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(spacing: 8) {
-                    WaveformBars(color: Theme.recordRed, heights: [6, 12, 16, 8], barWidth: 3, spacing: 2.5)
-                    Text("VoiceDrop 口述").font(.system(size: 14, weight: .semibold)).tracking(1).foregroundStyle(Theme.ink)
-                }
-                Text("我的录音").font(.system(size: 27, weight: .semibold)).foregroundStyle(Theme.ink)
+        HStack {
+            HStack(spacing: 8) {
+                WaveformBars(color: Theme.recordRed, heights: [6, 12, 16, 8], barWidth: 3, spacing: 2.5)
+                Text("VoiceDrop 口述").font(.system(size: 14, weight: .semibold)).tracking(1).foregroundStyle(Theme.ink)
             }
             Spacer()
             NavSquare(systemName: "gearshape") { showSettings = true }.accessibilityLabel("设置")
         }
-        .padding(.top, 6).padding(.horizontal, 22).padding(.bottom, 12)
+        .padding(.top, 6).padding(.horizontal, 22).padding(.bottom, 10)
+    }
+
+    // MARK: Tabs (我的录音 / 社区)
+
+    private var tabHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 20) {
+            tabLabel("我的录音", .recordings)
+            tabLabel("社区", .community)
+            Spacer()
+        }
+        .padding(.horizontal, 22).padding(.bottom, 10)
+    }
+
+    private func tabLabel(_ title: String, _ t: HomeTab) -> some View {
+        let active = tab == t
+        return Button {
+            tab = t
+            if t == .community { Task { await community.load() } }
+        } label: {
+            VStack(spacing: 5) {
+                Text(title).font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(active ? Theme.ink : Theme.faint)
+                Capsule().fill(active ? Theme.recordRed : .clear).frame(height: 3)
+                    .frame(maxWidth: active ? .infinity : 0)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: List
 
-    @ViewBuilder private var content: some View {
+    @ViewBuilder private var recordingsContent: some View {
         if store.loading && rows.isEmpty {
             Spacer(); ProgressView().tint(Theme.recordRed); Spacer()
         } else if let err = store.error, rows.isEmpty {
@@ -112,6 +143,54 @@ struct LibraryView: View {
             .contentMargins(.bottom, 104, for: .scrollContent)   // clear the floating button
             .refreshable { await refresh() }
         }
+    }
+
+    // MARK: Community list
+
+    @ViewBuilder private var communityContent: some View {
+        if community.loading && community.posts.isEmpty {
+            Spacer(); ProgressView().tint(Theme.accent); Spacer()
+        } else if let err = community.error, community.posts.isEmpty {
+            Spacer(); message("加载失败", err); Spacer()
+        } else if community.posts.isEmpty {
+            Spacer(); message("社区还没有分享", "在文章右上角 ⋯ 里点「分享到社区」，大家就能看到。"); Spacer()
+        } else {
+            List {
+                ForEach(community.posts) { post in
+                    Button { selectedPost = post } label: { communityCard(post) }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color.clear).listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 6, trailing: 16))
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.bottom, 24, for: .scrollContent)
+            .refreshable { await community.load() }
+        }
+    }
+
+    private func communityCard(_ post: CommunityPost) -> some View {
+        HStack(spacing: 13) {
+            RoundedRectangle(cornerRadius: Theme.R.card)
+                .fill(Theme.accentSoft)
+                .frame(width: 42, height: 42)
+                .overlay(Image(systemName: "doc.text").font(.system(size: 17)).foregroundStyle(Theme.accent))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(post.title ?? "(无题)").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
+                    .lineLimit(1).truncationMode(.tail)
+                HStack(spacing: 9) {
+                    Text(post.author ?? "匿名").font(.system(size: 13)).foregroundStyle(Theme.accent)
+                    Text(communityDate(post.firstSharedAt)).font(.system(size: 13)).foregroundStyle(Theme.metaChrome)
+                }
+            }
+            Spacer(minLength: 6)
+            Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.chevron)
+        }
+        .padding(.vertical, 14).padding(.horizontal, 15)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: Theme.R.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.R.card).stroke(Theme.borderChrome, lineWidth: 1))
+        .cardChromeShadow()
     }
 
     private func rowCard(_ rec: Recording) -> some View {
