@@ -1,7 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// 成文阅读：听录音 + 读挖出的文章 + 文末一键发布。暖灰阅读底（#F0EDE7）。
+/// 成文阅读：听录音 + 读挖出的文章 + 一键发布。暖灰阅读底（#F0EDE7）。
+/// 右上角 ⋯ 菜单（发布公众号草稿 / 分享）；底部常驻一条微信式按住说话 bar。
 struct RecordingDetailView: View {
     let store: LibraryStore
     let recording: Recording
@@ -22,10 +23,12 @@ struct RecordingDetailView: View {
     @State private var toast: String?
     @State private var sharePayload: SharePayload?
 
-    // Live voice editing (in-place, hold-to-talk → agent rewrites the article).
-    @State private var editing = false
+    // Live voice editing — persistent push-to-talk bar.
     @State private var agent = ArticleAgentSession()
     @State private var dictation = SpeechDictation()
+    @State private var lastInstruction: String?     // shown while rewriting
+    @State private var willCancel = false           // slid finger up past threshold
+    @State private var connected = false
 
     private var articles: [MinedArticle] { doc?.resolvedArticles ?? [] }
 
@@ -44,6 +47,8 @@ struct RecordingDetailView: View {
         }
         .background(Theme.readBG.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .overlay(alignment: .bottom) { if !articles.isEmpty { voiceBar } }
+        .overlay(alignment: .bottom) { toastView }
         .task {
             if recording.isEmpty {
                 emptyReason = await store.fetchEmptyReason(recording)
@@ -52,8 +57,9 @@ struct RecordingDetailView: View {
             }
             loadingDoc = false
             await settings.loadWechat()
+            await connectIfNeeded()
         }
-        .onDisappear { player.stop(); if editing { endEditing() } }
+        .onDisappear { player.stop(); dictation.stop(); agent.disconnect() }
         .sheet(isPresented: $showingWechatSettings, onDismiss: {
             if publishAfterSetup {
                 publishAfterSetup = false
@@ -61,8 +67,20 @@ struct RecordingDetailView: View {
             }
         }) { WechatSettingsSheet(store: settings) }
         .sheet(item: $sharePayload) { ShareSheet(items: [$0.text]) }
-        .overlay(alignment: .bottom) { if editing { editBar } }
-        .overlay(alignment: .bottom) { toastView }
+    }
+
+    /// Open the editing socket + ask for mic/speech once the article is loaded.
+    private func connectIfNeeded() async {
+        guard !connected, !articles.isEmpty else { return }
+        connected = true
+        agent.onUpdate = { newDoc in
+            doc = newDoc
+            articleIndex = min(articleIndex, max(0, newDoc.resolvedArticles.count - 1))
+            lastInstruction = nil
+            showToast("已更新")
+        }
+        agent.connect(recording)
+        await dictation.requestAuth()
     }
 
     // MARK: Nav bar
@@ -73,8 +91,24 @@ struct RecordingDetailView: View {
                 .accessibilityLabel("返回")
             Spacer()
             if !articles.isEmpty {
-                NavSquare(systemName: "square.and.arrow.up", border: Theme.borderRead) { Task { await share() } }
-                    .accessibilityLabel("分享")
+                Menu {
+                    Button { Task { await publishWechatTapped() } } label: {
+                        Label("发布公众号草稿", systemImage: "paperplane")
+                    }
+                    Button { Task { await share() } } label: {
+                        Label("分享", systemImage: "square.and.arrow.up")
+                    }
+                } label: {
+                    RoundedRectangle(cornerRadius: Theme.R.nav)
+                        .fill(Theme.ink)
+                        .frame(width: 38, height: 38)
+                        .overlay {
+                            if publishing { ProgressView().tint(.white) }
+                            else { Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white) }
+                        }
+                        .navButtonShadow()
+                }
+                .accessibilityLabel("更多")
             }
         }
         .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 8)
@@ -90,8 +124,7 @@ struct RecordingDetailView: View {
     private var articlePane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                playerCard
-                    .padding(.top, 6)
+                playerCard.padding(.top, 6)
 
                 if let a = articles[safe: articleIndex] {
                     Text(a.title)
@@ -110,12 +143,10 @@ struct RecordingDetailView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, articles.count > 1 ? 16 : 20)
-
-                    publishCard.padding(.top, 26)
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, editing ? 160 : 40)
+            .padding(.bottom, 120)   // clear the persistent bar
         }
     }
 
@@ -143,44 +174,6 @@ struct RecordingDetailView: View {
         (try? AttributedString(markdown: a.body, options: .init(
             interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(a.body)
-    }
-
-    // MARK: Publish CTA (end of article)
-
-    private var publishCard: some View {
-        VStack(spacing: 12) {
-            Text("这篇可以发布了").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.inkRead)
-            Text("推送到微信公众号草稿箱，约 1 分钟到达")
-                .font(.system(size: 13)).foregroundStyle(Theme.metaRead)
-                .multilineTextAlignment(.center)
-
-            Button { Task { await publishWechatTapped() } } label: {
-                HStack(spacing: 7) {
-                    if publishing { ProgressView().tint(.white) }
-                    else { Image(systemName: "paperplane.fill").font(.system(size: 14)) }
-                    Text("发布公众号").font(.system(size: 15, weight: .semibold))
-                }
-                .foregroundStyle(.white)
-                .padding(.vertical, 13).padding(.horizontal, 22)
-                .background(Theme.accent, in: RoundedRectangle(cornerRadius: Theme.R.primary))
-                .accentButtonShadow()
-            }
-            .buttonStyle(.plain)
-            .disabled(publishing || editing)
-
-            HStack(spacing: 0) {
-                Text("想改改？").font(.system(size: 14)).foregroundStyle(Theme.metaRead)
-                Button { startEditing() } label: {
-                    Text("用语音修改").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent)
-                }
-                .buttonStyle(.plain).disabled(editing)
-            }
-            .padding(.top, 2)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(20)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: Theme.R.primary))
-        .overlay(RoundedRectangle(cornerRadius: Theme.R.primary).stroke(Theme.borderRead, lineWidth: 1))
     }
 
     // MARK: Player card
@@ -260,89 +253,92 @@ struct RecordingDetailView: View {
         }
     }
 
-    // MARK: Voice editing (live agent)
+    // MARK: Push-to-talk bar (按住说话，仿微信)
 
-    private func startEditing() {
-        editing = true
-        agent.onUpdate = { newDoc in
-            doc = newDoc
-            articleIndex = min(articleIndex, max(0, newDoc.resolvedArticles.count - 1))
-        }
-        agent.connect(recording)
-        Task { await dictation.requestAuth() }
-    }
-
-    private func endEditing() {
-        dictation.stop(); agent.disconnect(); editing = false
-    }
-
-    private var editBar: some View {
-        let busy = agent.state == .working
+    private var voiceBar: some View {
+        let recording = dictation.isRecording
+        let working = agent.state == .working
         return VStack(spacing: 10) {
-            if dictation.isRecording && !dictation.transcript.isEmpty {
-                Text(dictation.transcript)
-                    .font(.system(size: 15)).foregroundStyle(Theme.inkRead)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.borderRead, lineWidth: 1))
-                    .padding(.horizontal, 16)
+            if recording {
+                darkBubble(dictation.transcript)
+            } else if working, let instr = lastInstruction {
+                sentBubble(instr)
             }
+            pill(recording: recording, working: working)
+        }
+        .padding(.top, 12).padding(.horizontal, 16).padding(.bottom, 30)
+        .frame(maxWidth: .infinity)
+        .background(Color(hex: "F4F1EB"))
+        .overlay(alignment: .top) { Rectangle().fill(Theme.borderRead).frame(height: 1) }
+    }
 
-            HStack(spacing: 14) {
-                Button { endEditing() } label: {
-                    Text("完成").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.secondary)
-                }
-                .buttonStyle(.plain)
-
-                Text(holdLabel(busy: busy))
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(dictation.isRecording ? .white : Theme.ink)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(dictation.isRecording ? Theme.accent : Theme.tileNeutral, in: Capsule())
-                    .overlay(alignment: .trailing) {
-                        if busy { ProgressView().tint(Theme.accent).padding(.trailing, 18) }
-                        else {
-                            Image(systemName: dictation.isRecording ? "waveform" : "mic.fill")
-                                .foregroundStyle(dictation.isRecording ? .white : Theme.secondary)
-                                .padding(.trailing, 18)
-                        }
-                    }
-                    .contentShape(Capsule())
-                    .gesture(holdGesture(disabled: busy || dictation.authorized != true))
-            }
-            .padding(.horizontal, 16)
-
-            if let e = agent.error ?? dictation.error {
-                Text(e).font(.system(size: 12)).foregroundStyle(.orange)
+    private func pill(recording: Bool, working: Bool) -> some View {
+        HStack(spacing: 8) {
+            if working {
+                ProgressView().tint(Theme.accent)
+                Text("正在重写…").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.secondary)
+            } else if recording {
+                Text(willCancel ? "上滑取消 · 松开放弃" : "松开 发送 · 上滑取消")
+                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+            } else {
+                Image(systemName: "mic").font(.system(size: 16)).foregroundStyle(Theme.ink)
+                Text("按住 说话 修改").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
             }
         }
-        .padding(.vertical, 14)
-        .background(Theme.card)
-        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20))
-        .overlay(alignment: .top) { Rectangle().fill(Theme.borderRead).frame(height: 1) }
-        .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: -4)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 15)
+        .background(RoundedRectangle(cornerRadius: Theme.R.primary)
+            .fill(recording ? Theme.accent : (working ? Color(hex: "F3ECE0") : Theme.card)))
+        .overlay(RoundedRectangle(cornerRadius: Theme.R.primary)
+            .stroke(recording ? Color(hex: "C94A2E") : Theme.borderRead, lineWidth: 1))
+        .shadow(color: recording ? Color(.sRGB, red: 216/255, green: 89/255, blue: 59/255, opacity: 0.30) : .clear,
+                radius: 7, x: 0, y: 4)
+        .contentShape(RoundedRectangle(cornerRadius: Theme.R.primary))
+        .gesture(holdGesture())
     }
 
-    private func holdLabel(busy: Bool) -> String {
-        if busy { return "正在修改…" }
-        if dictation.authorized != true { return "需要麦克风权限" }
-        return dictation.isRecording ? "松开发送" : "按住说出修改要求"
+    /// Dark bubble above the bar showing the live transcript (text only).
+    private func darkBubble(_ text: String) -> some View {
+        VStack(spacing: 0) {
+            Text(text.isEmpty ? "在听…" : text)
+                .font(.system(size: 16))
+                .foregroundStyle(text.isEmpty ? Color(hex: "B6AD9E") : Color(hex: "FBF6EE"))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(Color(hex: "2E2823"), in: RoundedRectangle(cornerRadius: 16))
+            DownTriangle().fill(Color(hex: "2E2823")).frame(width: 18, height: 9)
+                .padding(.leading, 24).frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
-    private func holdGesture(disabled: Bool) -> some Gesture {
+    /// Light "已发送指令" bubble shown while the server rewrites.
+    private func sentBubble(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "mic").font(.system(size: 13)).foregroundStyle(Color(hex: "6B6459"))
+            Text(text).font(.system(size: 15)).foregroundStyle(Color(hex: "6B6459")).lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderRead, lineWidth: 1))
+    }
+
+    /// Press-and-hold drives dictation; release sends (unless slid up to cancel).
+    private func holdGesture() -> some Gesture {
         DragGesture(minimumDistance: 0)
-            .onChanged { _ in
-                guard !disabled, !dictation.isRecording else { return }
-                dictation.start()
+            .onChanged { v in
+                guard agent.state != .working, dictation.authorized == true else { return }
+                if !dictation.isRecording { dictation.start() }
+                willCancel = v.translation.height < -60
             }
-            .onEnded { _ in
-                guard dictation.isRecording else { return }
+            .onEnded { v in
+                guard dictation.isRecording else { willCancel = false; return }
                 dictation.stop()
+                let cancel = v.translation.height < -60
+                willCancel = false
+                if cancel { return }
                 let text = dictation.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !text.isEmpty { agent.send(text) }
+                if !text.isEmpty { lastInstruction = text; agent.send(text) }
             }
     }
 
@@ -366,8 +362,6 @@ struct RecordingDetailView: View {
         case .ok:
             showToast("已推送，约 1 分钟后到草稿箱")
         case .notConfigured:
-            // Server says WeChat isn't configured (local state was stale) — open
-            // the config sheet and continue the publish once saved.
             publishAfterSetup = true
             showingWechatSettings = true
         case .failed:
@@ -390,7 +384,7 @@ struct RecordingDetailView: View {
                 .padding(.horizontal, 18).padding(.vertical, 12)
                 .background(.ultraThinMaterial, in: Capsule())
                 .overlay(Capsule().stroke(Theme.borderRead, lineWidth: 1))
-                .padding(.bottom, editing ? 130 : 32)
+                .padding(.bottom, articles.isEmpty ? 32 : 120)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
@@ -398,6 +392,18 @@ struct RecordingDetailView: View {
 
 private extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
+/// Small downward tail for the transcript bubble.
+struct DownTriangle: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.midX, y: r.maxY))
+        p.closeSubpath()
+        return p
+    }
 }
 
 /// A ready-to-share payload (article excerpt + short link), one String.
