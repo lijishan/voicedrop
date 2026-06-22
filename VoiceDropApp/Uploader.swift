@@ -10,6 +10,7 @@ final class Uploader {
 
     private(set) var pendingCount: Int = 0
     private(set) var pending: [URL] = []      // local takes still queued (observable)
+    private(set) var justUploaded: [String] = []  // uploaded, awaiting server confirmation
     private(set) var lastError: String?
 
     /// Base URL is public (not a secret), so it's hardcoded.
@@ -48,6 +49,9 @@ final class Uploader {
     }
 
     func refreshPending() { pending = pendingFiles(); pendingCount = pending.count }
+
+    /// Drop optimistic 待处理 entries the server has now confirmed in its list.
+    func dropConfirmed(_ names: Set<String>) { justUploaded.removeAll { names.contains($0) } }
 
     /// Move an uploaded take out of the pending scan but keep it on disk
     /// (Documents/uploaded/) — used when "上传后删除本地" is off.
@@ -100,6 +104,12 @@ final class Uploader {
                 try? FileManager.default.removeItem(at: url)
             } else {
                 Self.keepLocal(url)
+            }
+            // Keep showing this take — now as 待处理 — until the server list lists
+            // it, so the row changes badge in place instead of vanishing then
+            // re-appearing half a second later.
+            if !justUploaded.contains(url.lastPathComponent) {
+                justUploaded.append(url.lastPathComponent)
             }
             lastError = nil
             refreshPending()

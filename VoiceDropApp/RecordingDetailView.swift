@@ -29,7 +29,6 @@ struct RecordingDetailView: View {
     // Live voice editing — persistent push-to-talk bar.
     @State private var agent = ArticleAgentSession()
     @State private var dictation = SpeechDictation()
-    @State private var lastInstruction: String?     // shown while rewriting
     @State private var willCancel = false           // slid finger up past threshold
     @State private var connected = false
 
@@ -41,9 +40,9 @@ struct RecordingDetailView: View {
             if loadingDoc {
                 Spacer(); ProgressView().tint(Theme.accent); Spacer()
             } else if recording.isEmpty {
-                Spacer(); emptyState; Spacer()
+                emptyState
             } else if articles.isEmpty {
-                Spacer(); pending; Spacer()
+                pending
             } else {
                 articlePane
             }
@@ -81,7 +80,6 @@ struct RecordingDetailView: View {
         agent.onUpdate = { newDoc in
             doc = newDoc
             articleIndex = min(articleIndex, max(0, newDoc.resolvedArticles.count - 1))
-            lastInstruction = nil
             showToast("已更新")
         }
         agent.connect(recording)
@@ -101,7 +99,7 @@ struct RecordingDetailView: View {
                         Label(published ? "更新公众号草稿" : "发布公众号草稿", systemImage: "paperplane")
                     }
                     Button { Task { await shareToCommunity() } } label: {
-                        Label(sharedToCommunity ? "更新 VoiceDrop 社区文章" : "分享到 VoiceDrop 社区", systemImage: "person.2")
+                        Label(sharedToCommunity ? "更新 VD社区文章" : "分享到 VD社区", systemImage: "person.2")
                     }
                     Button { Task { await share() } } label: {
                         Label("分享", systemImage: "square.and.arrow.up")
@@ -242,23 +240,28 @@ struct RecordingDetailView: View {
 
     // MARK: Empty / pending
 
-    private var pending: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "clock.arrow.circlepath").font(.system(size: 36)).foregroundStyle(Theme.faint)
-            Text("还没成文").foregroundStyle(Theme.inkRead).font(.system(size: 17, weight: .semibold))
-            Text("服务器每 2 小时自动处理一次，过会儿再来看。")
-                .foregroundStyle(Theme.secondary).font(.system(size: 15))
-                .multilineTextAlignment(.center).padding(.horizontal, 40)
+    /// Non-成文 states still keep the audio player up top so you can replay the take.
+    private func statusScreen(icon: String, title: String, subtitle: String) -> some View {
+        VStack(spacing: 0) {
+            playerCard.padding(.horizontal, 20).padding(.top, 6)
+            Spacer(minLength: 24)
+            VStack(spacing: 10) {
+                Image(systemName: icon).font(.system(size: 36)).foregroundStyle(Theme.faint)
+                Text(title).foregroundStyle(Theme.inkRead).font(.system(size: 17, weight: .semibold))
+                Text(subtitle).foregroundStyle(Theme.secondary).font(.system(size: 15))
+                    .multilineTextAlignment(.center).padding(.horizontal, 40)
+            }
+            Spacer(minLength: 24)
         }
     }
 
+    private var pending: some View {
+        statusScreen(icon: "clock.arrow.circlepath", title: "还没成文",
+                     subtitle: "服务器每小时自动处理一次，过会儿再来看。")
+    }
+
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "speaker.slash").font(.system(size: 36)).foregroundStyle(Theme.faint)
-            Text("没检测到语音").foregroundStyle(Theme.inkRead).font(.system(size: 17, weight: .semibold))
-            Text(emptyReasonText).foregroundStyle(Theme.secondary).font(.system(size: 15))
-                .multilineTextAlignment(.center).padding(.horizontal, 40)
-        }
+        statusScreen(icon: "speaker.slash", title: "没检测到语音", subtitle: emptyReasonText)
     }
 
     private var emptyReasonText: String {
@@ -274,28 +277,57 @@ struct RecordingDetailView: View {
     private var voiceBar: some View {
         let recording = dictation.isRecording
         let working = agent.state == .working
-        return VStack(spacing: 10) {
-            if recording {
-                darkBubble(dictation.transcript)
-            } else if working, let instr = lastInstruction {
-                sentBubble(instr)
+        let firstId = agent.queue.first?.id
+        return VStack(spacing: 8) {
+            // Pending edits pile up here — newest on top, the one in flight sits
+            // just above the button and drains first; each builds on the last.
+            ForEach(agent.queue.reversed()) { req in
+                queueRow(req, inFlight: req.id == firstId)
             }
+            if recording { darkBubble(dictation.transcript) }
             pill(recording: recording, working: working)
                 .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 5)   // float over the body
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 10)
         .frame(maxWidth: .infinity)
+        .animation(.easeInOut(duration: 0.22), value: agent.queue)
+        .animation(.easeInOut(duration: 0.18), value: recording)
+    }
+
+    /// One queued instruction. The in-flight head is highlighted; the rest wait.
+    private func queueRow(_ req: ArticleAgentSession.EditRequest, inFlight: Bool) -> some View {
+        HStack(spacing: 8) {
+            if inFlight {
+                Image(systemName: "pencil").font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .symbolEffect(.pulse, options: .repeating)
+            } else {
+                Image(systemName: "clock").font(.system(size: 12)).foregroundStyle(Theme.faint)
+            }
+            Text(req.text).font(.system(size: 15))
+                .foregroundStyle(inFlight ? Theme.ink : Theme.secondary)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(inFlight ? Theme.accentSoft : Theme.card, in: RoundedRectangle(cornerRadius: 13))
+        .overlay(RoundedRectangle(cornerRadius: 13)
+            .stroke(inFlight ? Theme.accent.opacity(0.5) : Theme.borderRead, lineWidth: 1))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private func pill(recording: Bool, working: Bool) -> some View {
         HStack(spacing: 8) {
-            if working {
-                ProgressView().tint(Theme.accent)
-                Text("正在重写…").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.secondary)
-            } else if recording {
+            if recording {
                 Text(willCancel ? "上滑取消 · 松开放弃" : "松开 发送 · 上滑取消")
                     .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+            } else if working {
+                // The mic itself becomes the live "editing" indicator — no chip.
+                Image(systemName: "pencil.line").font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .symbolEffect(.pulse, options: .repeating)
+                Text("正在改…按住继续说").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
             } else {
                 Image(systemName: "mic").font(.system(size: 16)).foregroundStyle(Theme.ink)
                 Text("按住 说话 修改").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
@@ -304,7 +336,7 @@ struct RecordingDetailView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 15)
         .background(RoundedRectangle(cornerRadius: Theme.R.primary)
-            .fill(recording ? Theme.accent : (working ? Color(hex: "F3ECE0") : Theme.card)))
+            .fill(recording ? Theme.accent : Theme.card))
         .overlay(RoundedRectangle(cornerRadius: Theme.R.primary)
             .stroke(recording ? Color(hex: "C94A2E") : Theme.borderRead, lineWidth: 1))
         .shadow(color: recording ? Color(.sRGB, red: 216/255, green: 89/255, blue: 59/255, opacity: 0.30) : .clear,
@@ -327,23 +359,12 @@ struct RecordingDetailView: View {
         }
     }
 
-    /// Light "已发送指令" bubble shown while the server rewrites.
-    private func sentBubble(_ text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "mic").font(.system(size: 13)).foregroundStyle(Color(hex: "6B6459"))
-            Text(text).font(.system(size: 15)).foregroundStyle(Color(hex: "6B6459")).lineLimit(2)
-            Spacer(minLength: 0)
-        }
-        .padding(12)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderRead, lineWidth: 1))
-    }
-
     /// Press-and-hold drives dictation; release sends (unless slid up to cancel).
     private func holdGesture() -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { v in
-                guard agent.state != .working, dictation.authorized == true else { return }
+                // No working-state gate: speak the next sentence while the last rewrites.
+                guard dictation.authorized == true else { return }
                 if !dictation.isRecording { dictation.start() }
                 willCancel = v.translation.height < -60
             }
@@ -354,7 +375,7 @@ struct RecordingDetailView: View {
                 willCancel = false
                 if cancel { return }
                 let text = dictation.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !text.isEmpty { lastInstruction = text; agent.send(text) }
+                if !text.isEmpty { agent.enqueue(text) }
             }
     }
 

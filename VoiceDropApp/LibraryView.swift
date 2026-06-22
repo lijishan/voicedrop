@@ -20,13 +20,20 @@ struct LibraryView: View {
     @State private var confirmUnshare: CommunityPost?
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Local takes still uploading (shown at the top) + server recordings.
+    /// Local takes still uploading (top) + just-uploaded optimistic 待处理 +
+    /// server recordings. Same audioName = same row id, so badges change in place.
     private var rows: [Recording] {
         let serverNames = Set(store.recordings.map(\.audioName))
-        let pending = uploader.pending
+        let uploading = uploader.pending
             .map { Recording(audioName: $0.lastPathComponent, uploaded: "", hasArticles: false, isEmpty: false, uploading: true) }
             .filter { !serverNames.contains($0.audioName) }
-        return (pending + store.recordings).sorted { $0.audioName > $1.audioName }
+        let busy = serverNames.union(uploading.map(\.audioName))
+        // Optimistic: an uploaded take shows as 待处理 immediately, before the
+        // server list catches up — so the row never disappears between states.
+        let optimistic = uploader.justUploaded
+            .filter { !busy.contains($0) }
+            .map { Recording(audioName: $0, uploaded: "", hasArticles: false, isEmpty: false, uploading: false) }
+        return (uploading + optimistic + store.recordings).sorted { $0.audioName > $1.audioName }
     }
 
     var body: some View {
@@ -70,6 +77,7 @@ struct LibraryView: View {
         uploader.refreshPending()                 // surface 正在上传 rows immediately
         await store.load()
         if uploader.pendingCount > 0 { _ = await uploader.drainPending(); await store.load() }
+        uploader.dropConfirmed(Set(store.recordings.map(\.audioName)))  // prune confirmed optimistic rows
     }
 
     // MARK: Top bar
@@ -91,7 +99,7 @@ struct LibraryView: View {
     private var tabHeader: some View {
         HStack(alignment: .firstTextBaseline, spacing: 20) {
             tabLabel("我的录音", .recordings)
-            tabLabel("社区", .community)
+            tabLabel("VD社区", .community)
             Spacer()
         }
         .padding(.horizontal, 22).padding(.bottom, 10)
@@ -160,7 +168,7 @@ struct LibraryView: View {
         } else if let err = community.error, community.posts.isEmpty {
             Spacer(); message("加载失败", err); Spacer()
         } else if community.posts.isEmpty {
-            Spacer(); message("社区还没有分享", "在文章右上角 ⋯ 里点「分享到社区」，大家就能看到。"); Spacer()
+            Spacer(); message("VD社区还没有分享", "在文章右上角 ⋯ 里点「分享到 VD社区」，大家就能看到。"); Spacer()
         } else {
             List {
                 ForEach(community.posts) { post in

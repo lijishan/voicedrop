@@ -12,8 +12,16 @@ enum AgentState: Equatable { case idle, connecting, working, error }
 @MainActor
 @Observable
 final class ArticleAgentSession {
+    /// One queued spoken instruction.
+    struct EditRequest: Identifiable, Equatable { let id = UUID(); let text: String }
+
     var state: AgentState = .idle
     var error: String?
+
+    /// Outstanding edits. `queue.first` is the one in flight once `processing`;
+    /// the rest are waiting their turn. Drives the stacked queue UI.
+    var queue: [EditRequest] = []
+    private var processing = false
 
     /// Called on the main actor whenever the server pushes a rewritten article.
     var onUpdate: ((ArticleDoc) -> Void)?
@@ -48,20 +56,40 @@ final class ArticleAgentSession {
         t.resume()
         state = .idle               // URLSession buffers sends until the socket opens
         receive()
+        if !queue.isEmpty { processing = false; pump() }   // resume after a reconnect
     }
 
-    func send(_ instruction: String) {
+    /// Queue a spoken instruction. Edits run strictly serially — the next is sent
+    /// only after the previous one's rewrite returns — so each builds on the last
+    /// result. Keep talking; requests pile up and drain one at a time.
+    func enqueue(_ instruction: String) {
         let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let task else { return }
+        guard !text.isEmpty else { return }
+        queue.append(EditRequest(text: text))
+        pump()
+    }
+
+    /// Send the head of the queue, but only if nothing is in flight.
+    private func pump() {
+        guard !processing, let head = queue.first, let task else { return }
+        processing = true
         state = .working
         error = nil
-        let payload: [String: String] = ["type": "instruct", "text": text]
+        let payload: [String: String] = ["type": "instruct", "text": head.text]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let str = String(data: data, encoding: .utf8) else { return }
         task.send(.string(str)) { [weak self] err in
             guard let err else { return }
-            Task { @MainActor in self?.state = .error; self?.error = err.localizedDescription }
+            Task { @MainActor in self?.failHead(err.localizedDescription) }
         }
+    }
+
+    /// The in-flight edit failed: surface it, drop the head, keep draining the rest.
+    private func failHead(_ message: String) {
+        error = message
+        if processing, !queue.isEmpty { queue.removeFirst() }
+        processing = false
+        if queue.isEmpty { state = .error } else { pump() }
     }
 
     private func receive() {
@@ -96,10 +124,12 @@ final class ArticleAgentSession {
                let doc = try? JSONDecoder().decode(ArticleDoc.self, from: d) {
                 onUpdate?(doc)
             }
-            state = .idle
+            if processing, !queue.isEmpty { queue.removeFirst() }   // this edit is done
+            processing = false
+            state = queue.isEmpty ? .idle : .working
+            pump()                                                  // start the next, if any
         case "error":
-            state = .error
-            error = (obj["message"] as? String) ?? "出错了"
+            failHead((obj["message"] as? String) ?? "出错了")
         default:
             break
         }
@@ -119,6 +149,8 @@ final class ArticleAgentSession {
         task = nil
         session?.invalidateAndCancel()
         session = nil
+        queue.removeAll()
+        processing = false
         state = .idle
         error = nil
     }
