@@ -21,10 +21,6 @@ jobs:
           cache: 'pip'
           cache-dependency-path: mining/requirements.txt
 
-      - uses: FedericoCarboni/setup-ffmpeg@v3
-        with:
-          github-token: ${{ github.token }}
-
       - name: Install deps
         run: pip install -r mining/requirements.txt
 
