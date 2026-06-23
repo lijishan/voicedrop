@@ -30,6 +30,7 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 BASE = "https://jianshuo.dev/files/api"
+NOTIFY_URL = "https://jianshuo.dev/agent/notify"
 TOKEN = os.environ["FILES_TOKEN"]
 CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = os.environ.get("MINE_MODEL", "claude-sonnet-4-6")
@@ -479,6 +480,23 @@ def probe_duration(path):
         return None
 
 
+def notify(audio_key, status):
+    """Fire-and-forget: push a status change to the user's StatusHub so the app
+    can update in real-time without polling. Non-fatal — a failed notify just
+    means the app stays on the old badge until the next manual refresh."""
+    scope = _user_prefix(audio_key)
+    stem = os.path.basename(audio_key)
+    if stem.endswith(".m4a"):
+        stem = stem[:-4]
+    try:
+        body = json.dumps({"user_scope": scope, "stem": stem, "status": status}).encode()
+        _req("POST", NOTIFY_URL, data=body,
+             headers={"Authorization": f"Bearer {TOKEN}",
+                      "Content-Type": "application/json"})
+    except Exception as e:
+        log(f"   notify({status}) failed (non-fatal): {e}")
+
+
 def write_empty(audio, reason):
     """Mark a recording processed-but-empty so it's never re-mined and the app
     can show a 无语音 badge. reason ∈ {corrupt, silent, no-speech, no-article}."""
@@ -640,6 +658,7 @@ def main():
         leaf = os.path.basename(audio)
         rec_t0 = time.time()
         log(f"── {leaf}  ({i}/{len(todo)})")
+        notify(audio, "processing")   # app: 待处理 → 处理中
         try:
             with tempfile.TemporaryDirectory() as td:
                 local = os.path.join(td, leaf)
@@ -657,6 +676,7 @@ def main():
                     write_empty(audio, reason)
                     empty += 1
                     log(f"   ✗ {reason} → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
+                    notify(audio, "empty")
                     continue
 
                 # ASR streams at ~realtime (chunked + parallel); bound generously
@@ -670,6 +690,7 @@ def main():
                     write_empty(audio, "no-speech")
                     empty += 1
                     log(f"   ✗ no-speech → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
+                    notify(audio, "empty")
                     continue
 
                 # Too thin to be an article — mark empty and skip the LLM, else
@@ -678,6 +699,7 @@ def main():
                     write_empty(audio, "too-short")
                     empty += 1
                     log(f"   ✗ too-short ({len(transcript.strip())} chars) → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
+                    notify(audio, "empty")
                     continue
 
                 claude_md = fetch_claude_md(audio)
@@ -702,6 +724,7 @@ def main():
                         write_empty(audio, "no-article")
                         empty += 1
                         log(f"   ✗ no-article (both passes) → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
+                        notify(audio, "empty")
                         continue
                 else:
                     llm = time.time() - t
@@ -726,6 +749,7 @@ def main():
                 if srt:
                     api_put(srt_key, srt.encode(), "application/x-subrip; charset=utf-8")
                 tot_net += time.time() - t
+                notify(audio, "ready")   # app: 处理中 → 已成文
                 mined += 1
                 titles = " | ".join(a["title"] for a in articles)
                 log(f"   ✓ {len(articles)} article(s): {titles} (total {time.time()-rec_t0:.1f}s)")
