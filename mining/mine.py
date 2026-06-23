@@ -521,27 +521,32 @@ def build_srt(utterances):
     return ("\n".join(out).strip() + "\n") if out else ""
 
 
-EMPTY_ASR_EXIT = 3   # volc_asr_stream.py: ffmpeg decoded no audio (corrupt/silent)
+EMPTY_ASR_EXIT = 3   # volc_asr_file.py: empty / silent audio
 
 
-def transcribe(audio_path, timeout_s):
-    """Return (plain_transcript, srt). srt may be '' if the ASR returned no
-    per-utterance timestamps; transcript is '' if the file decoded to no audio.
-    Bounded by timeout_s so a wedged ASR connection can't stall the whole run."""
-    out = audio_path + ".asr.json"
+def transcribe(audio_key, timeout_s):
+    """Return (plain_transcript, srt_string).
+    Submits the R2 key to the file-recognition API (no local download needed).
+    Returns ('', '') for empty/silent audio; raises on hard failure."""
+    fd, out = tempfile.mkstemp(suffix=".asr.json")
+    os.close(fd)
     try:
-        p = subprocess.run([sys.executable, os.path.join(HERE, "volc_asr_stream.py"),
-                            audio_path, out], timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"ASR timed out after {timeout_s}s")
-    if p.returncode == EMPTY_ASR_EXIT:        # decoded to no audio → treat as empty
-        return "", ""
-    if p.returncode != 0:
-        raise RuntimeError(f"ASR failed (exit {p.returncode})")
-    res = json.load(open(out)).get("result", {})
-    utts = res.get("utterances", [])
-    text = res.get("text") or "".join(u.get("text", "") for u in utts)
-    return text.strip(), build_srt(utts)
+        try:
+            p = subprocess.run([sys.executable, os.path.join(HERE, "volc_asr_file.py"),
+                                audio_key, out], timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"ASR timed out after {timeout_s}s")
+        if p.returncode == EMPTY_ASR_EXIT:
+            return "", ""
+        if p.returncode != 0:
+            raise RuntimeError(f"ASR failed (exit {p.returncode})")
+        res = json.load(open(out)).get("result", {})
+        utts = res.get("utterances", [])
+        text = res.get("text") or "".join(u.get("text", "") for u in utts)
+        return text.strip(), build_srt(utts)
+    finally:
+        try: os.unlink(out)
+        except OSError: pass
 
 
 def _parse_llm_json(text):
@@ -647,108 +652,97 @@ def main():
         log(f"── {leaf}  ({i}/{len(todo)})")
         notify(audio, "processing")   # app: 待处理 → 处理中
         try:
-            with tempfile.TemporaryDirectory() as td:
-                local = os.path.join(td, leaf)
+            t = time.time()
+            transcript, srt = transcribe(audio, timeout_s=600)
+            asr = time.time() - t; tot_asr += asr
+            log(f"   ASR → {len(transcript)} chars ({asr:.1f}s)")
 
-                t = time.time()
-                api_download(audio, local)
-                dl = time.time() - t; tot_net += dl
-                size = os.path.getsize(local)
-                log(f"   download {size/1024:.0f}KB ({dl:.1f}s)")
+            if not transcript:
+                write_empty(audio, "no-speech")
+                empty += 1
+                log(f"   ✗ no-speech → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
+                notify(audio, "empty")
+                continue
 
-                # ASR uses ffmpeg internally; corrupt/silent files exit with
-                # EMPTY_ASR_EXIT (3) → transcribe() returns ("", "") → caught below.
-                t = time.time()
-                transcript, srt = transcribe(local, timeout_s=600)
-                asr = time.time() - t; tot_asr += asr
-                log(f"   ASR → {len(transcript)} chars ({asr:.1f}s)")
+            # Too thin to be an article — mark empty and skip the LLM, else
+            # the model returns prose (not JSON) and the file fails forever.
+            if len(transcript.strip()) < MIN_CHARS:
+                write_empty(audio, "too-short")
+                empty += 1
+                log(f"   ✗ too-short ({len(transcript.strip())} chars) → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
+                notify(audio, "empty")
+                continue
 
-                if not transcript:
-                    write_empty(audio, "no-speech")
-                    empty += 1
-                    log(f"   ✗ no-speech → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
-                    notify(audio, "empty")
-                    continue
-
-                # Too thin to be an article — mark empty and skip the LLM, else
-                # the model returns prose (not JSON) and the file fails forever.
-                if len(transcript.strip()) < MIN_CHARS:
-                    write_empty(audio, "too-short")
-                    empty += 1
-                    log(f"   ✗ too-short ({len(transcript.strip())} chars) → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
-                    notify(audio, "empty")
-                    continue
-
-                claude_md = fetch_claude_md(audio)
-                if claude_md:
-                    log(f"   + CLAUDE.md ({len(claude_md)} chars)")
-                t = time.time()
+            claude_md = fetch_claude_md(audio)
+            if claude_md:
+                log(f"   + CLAUDE.md ({len(claude_md)} chars)")
+            t = time.time()
+            try:
+                articles = generate_articles(transcript, claude_md)
+            except NoArticleError:
+                tot_llm += time.time() - t
+                # Style-laden pass returned empty — retry with force mode
+                # (no style constraints) before giving up.
+                log(f"   ⚠ no-article on first pass, retrying (force mode)…")
+                t2 = time.time()
                 try:
-                    articles = generate_articles(transcript, claude_md)
-                except NoArticleError:
-                    tot_llm += time.time() - t
-                    # Style-laden pass returned empty — retry with force mode
-                    # (no style constraints) before giving up.
-                    log(f"   ⚠ no-article on first pass, retrying (force mode)…")
-                    t2 = time.time()
-                    try:
-                        articles = generate_articles(transcript, force=True)
-                        llm2 = time.time() - t2
-                        tot_llm += llm2
-                        log(f"   Claude mine (force) → {len(articles)} article(s) ({llm2:.1f}s)")
-                    except (NoArticleError, Exception) as e2:
-                        tot_llm += time.time() - t2
-                        write_empty(audio, "no-article")
-                        empty += 1
-                        log(f"   ✗ no-article (both passes) → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
-                        notify(audio, "empty")
-                        continue
-                else:
-                    llm = time.time() - t
-                    tot_llm += llm
-                    log(f"   Claude mine → {len(articles)} article(s) ({llm:.1f}s)")
+                    articles = generate_articles(transcript, force=True)
+                    llm2 = time.time() - t2
+                    tot_llm += llm2
+                    log(f"   Claude mine (force) → {len(articles)} article(s) ({llm2:.1f}s)")
+                except (NoArticleError, Exception) as e2:
+                    tot_llm += time.time() - t2
+                    write_empty(audio, "no-article")
+                    empty += 1
+                    log(f"   ✗ no-article (both passes) → marked 无语音 (total {time.time()-rec_t0:.1f}s)")
+                    notify(audio, "empty")
+                    continue
+            else:
+                llm = time.time() - t
+                tot_llm += llm
+                log(f"   Claude mine → {len(articles)} article(s) ({llm:.1f}s)")
 
-                json_key, srt_key = _stem_keys(audio)
-                art = {
-                    "schema": 2,
-                    "id": leaf[:-4],
-                    "sourceAudio": leaf,
-                    "createdAt": uploaded.get(audio, ""),
-                    "transcript": transcript,
-                    "srt": srt,
-                    "articles": articles,
-                    "status": "ready",
-                    "model": MODEL,
-                }
-                t = time.time()
-                api_put(json_key, json.dumps(art, ensure_ascii=False).encode(),
-                        "application/json")
-                if srt:
-                    api_put(srt_key, srt.encode(), "application/x-subrip; charset=utf-8")
-                tot_net += time.time() - t
-                notify(audio, "ready")   # app: 处理中 → 已成文
-                mined += 1
-                titles = " | ".join(a["title"] for a in articles)
-                log(f"   ✓ {len(articles)} article(s): {titles} (total {time.time()-rec_t0:.1f}s)")
+            json_key, srt_key = _stem_keys(audio)
+            art = {
+                "schema": 2,
+                "id": leaf[:-4],
+                "sourceAudio": leaf,
+                "createdAt": uploaded.get(audio, ""),
+                "transcript": transcript,
+                "srt": srt,
+                "articles": articles,
+                "status": "ready",
+                "model": MODEL,
+            }
+            t = time.time()
+            api_put(json_key, json.dumps(art, ensure_ascii=False).encode(),
+                    "application/json")
+            if srt:
+                api_put(srt_key, srt.encode(), "application/x-subrip; charset=utf-8")
+            tot_net += time.time() - t
+            notify(audio, "ready")   # app: 处理中 → 已成文
+            mined += 1
+            titles = " | ".join(a["title"] for a in articles)
+            log(f"   ✓ {len(articles)} article(s): {titles} (total {time.time()-rec_t0:.1f}s)")
 
-                # Push WeChat drafts if the user has credentials stored and the
-                # 自动推草稿 toggle is on. Persists each article's wechatMediaId so
-                # a later on-demand 发布 updates that draft in place, not a dupe.
-                wechat_cfg = fetch_wechat_config(audio)
-                if wechat_cfg:
-                    try:
-                        wx_token = wechat_access_token(wechat_cfg["appid"], wechat_cfg["secret"])
-                        doc_id = art.get("id") or leaf[:-4]
-                        thumb_id = resolve_cover_thumb(wx_token, doc_id, wechat_cfg)
-                        sync_wechat_drafts(wx_token, art, thumb_id,
-                                           make_thumb=lambda: resolve_cover_thumb(wx_token, doc_id, wechat_cfg, force=True))
-                        # Persist the cover->media_id cache, then the wechatMediaIds.
-                        api_put(_user_prefix(audio) + "WECHAT.json",
-                                json.dumps(wechat_cfg, ensure_ascii=False).encode(), "application/json")
-                        api_put(json_key, json.dumps(art, ensure_ascii=False).encode(),
-                                "application/json")
-                    except Exception as wx_err:
-                        log(f"   ⚠ WeChat draft failed: {wx_err}")
+            # Push WeChat drafts if the user has credentials stored and the
+            # 自动推草稿 toggle is on. Persists each article's wechatMediaId so
+            # a later on-demand 发布 updates that draft in place, not a dupe.
+            wechat_cfg = fetch_wechat_config(audio)
+            if wechat_cfg:
+                try:
+                    wx_token = wechat_access_token(wechat_cfg["appid"], wechat_cfg["secret"])
+                    doc_id = art.get("id") or leaf[:-4]
+                    thumb_id = resolve_cover_thumb(wx_token, doc_id, wechat_cfg)
+                    sync_wechat_drafts(wx_token, art, thumb_id,
+                                       make_thumb=lambda: resolve_cover_thumb(wx_token, doc_id, wechat_cfg, force=True))
+                    # Persist the cover->media_id cache, then the wechatMediaIds.
+                    api_put(_user_prefix(audio) + "WECHAT.json",
+                            json.dumps(wechat_cfg, ensure_ascii=False).encode(), "application/json")
+                    api_put(json_key, json.dumps(art, ensure_ascii=False).encode(),
+                            "application/json")
+                except Exception as wx_err:
+                    log(f"   ⚠ WeChat draft failed: {wx_err}")
         except Exception as e:
             log(f"   FAILED {leaf}: {e}")
             print(f"  FAILED {audio}: {e}", file=sys.stderr)
