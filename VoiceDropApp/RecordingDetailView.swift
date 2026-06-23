@@ -24,7 +24,8 @@ struct RecordingDetailView: View {
     @State private var sharePayload: SharePayload?
     @State private var community = CommunityStore()
     @State private var published = false            // already has a WeChat draft
-    @State private var sharedToCommunity = false     // already shared to the community
+    @State private var sharedToCommunity = false    // already shared to the community
+    @State private var communityShareId: String?    // shareId when shared (needed for unshare)
 
     // Live voice editing — persistent push-to-talk bar.
     @State private var agent = ArticleAgentSession()
@@ -61,7 +62,10 @@ struct RecordingDetailView: View {
             published = doc?.hasWechatDraft ?? false
             await settings.loadWechat()
             await connectIfNeeded()
-            if !articles.isEmpty { sharedToCommunity = await community.isShared(recording) }
+            if !articles.isEmpty {
+                communityShareId = await community.sharedShareId(recording)
+                sharedToCommunity = communityShareId != nil
+            }
         }
         .onDisappear { player.stop(); dictation.stop(); agent.disconnect() }
         .sheet(isPresented: $showingWechatSettings, onDismiss: {
@@ -98,8 +102,11 @@ struct RecordingDetailView: View {
                     Button { Task { await publishWechatTapped() } } label: {
                         Label(published ? "更新公众号草稿" : "发布公众号草稿", systemImage: "paperplane")
                     }
-                    Button { Task { await shareToCommunity() } } label: {
-                        Label(sharedToCommunity ? "更新 VD社区文章" : "分享到 VD社区", systemImage: "person.2")
+                    Toggle(isOn: Binding(
+                        get: { sharedToCommunity },
+                        set: { newValue in Task { await toggleCommunity(newValue) } }
+                    )) {
+                        Label("VD社区可见", systemImage: "person.2")
                     }
                     Button { Task { await share() } } label: {
                         Label("分享", systemImage: "square.and.arrow.up")
@@ -125,12 +132,30 @@ struct RecordingDetailView: View {
         else { showToast("生成分享链接失败") }
     }
 
-    private func shareToCommunity() async {
-        if !AuthStore.shared.isAuthenticated { showToast("分享到社区需要用 Apple 登录，确认你是同一个人") }
-        let wasShared = sharedToCommunity
-        let ok = await community.share(recording)
-        if ok { sharedToCommunity = true }
-        showToast(ok ? (wasShared ? "已更新社区文章" : "已分享到社区") : "分享失败，请稍后再试")
+    private func toggleCommunity(_ visible: Bool) async {
+        if visible {
+            if !AuthStore.shared.isAuthenticated { showToast("分享到社区需要用 Apple 登录，确认你是同一个人") }
+            let shareId = await community.share(recording)
+            if let shareId {
+                communityShareId = shareId
+                sharedToCommunity = true
+                showToast("已在 VD社区可见")
+            } else {
+                sharedToCommunity = false
+                showToast("分享失败，请稍后再试")
+            }
+        } else {
+            guard let shareId = communityShareId else { return }
+            sharedToCommunity = false
+            let ok = await community.unshare(shareId)
+            if ok {
+                communityShareId = nil
+                showToast("已从 VD社区隐藏")
+            } else {
+                sharedToCommunity = true
+                showToast("操作失败，请稍后再试")
+            }
+        }
     }
 
     // MARK: Article pane

@@ -56,36 +56,39 @@ final class CommunityStore {
         } catch { self.error = error.localizedDescription }
     }
 
-    /// Share (or re-share) one of the user's articles to the community. Re-sharing
-    /// updates the snapshot in place; the first-share time is preserved server-side.
+    /// Share (or re-share) one of the user's articles to the community.
+    /// Returns the shareId on success (needed for unshare), nil on failure.
     /// If the server returns 403 needs_apple_signin, triggers Apple sign-in and retries once.
-    func share(_ rec: Recording) async -> Bool {
+    func share(_ rec: Recording) async -> String? {
         needsAppleSignIn = false
-        guard !token.isEmpty, rec.hasArticles else { return false }
-        if await postShare(rec) { return true }
-        // Not Apple-verified yet → sign in once and retry.
+        guard !token.isEmpty, rec.hasArticles else { return nil }
+        if let id = await postShare(rec) { return id }
         if needsAppleSignIn {
             await AuthStore.shared.signInWithApple()
-            guard AuthStore.shared.isAuthenticated else { return false }
+            guard AuthStore.shared.isAuthenticated else { return nil }
             return await postShare(rec)
         }
-        return false
+        return nil
     }
 
     private var needsAppleSignIn = false
 
-    private func postShare(_ rec: Recording) async -> Bool {
+    private func postShare(_ rec: Recording) async -> String? {
         var req = URLRequest(url: base.appending(path: "community").appending(path: "share").appending(path: rec.articleKey))
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            if (200..<300).contains(code) { needsAppleSignIn = false; return true }
+            if (200..<300).contains(code) {
+                needsAppleSignIn = false
+                struct R: Decodable { let shareId: String }
+                return (try? JSONDecoder().decode(R.self, from: data))?.shareId
+            }
             needsAppleSignIn = (code == 403) &&
                 ((try? JSONDecoder().decode([String:String].self, from: data))?["error"] == "needs_apple_signin")
-            return false
-        } catch { return false }
+            return nil
+        } catch { return nil }
     }
 
     /// Un-share (delete) one of the user's own community posts. Removed from the
@@ -126,18 +129,19 @@ final class CommunityStore {
         } catch { return false }
     }
 
-    /// Whether this article is currently shared to the community (drives the
-    /// 分享 / 更新 menu label).
-    func isShared(_ rec: Recording) async -> Bool {
-        guard !token.isEmpty, rec.hasArticles else { return false }
+    /// Returns the shareId if this article is currently shared to the community, nil if not.
+    /// The shareId is needed to call unshare() from the detail view.
+    func sharedShareId(_ rec: Recording) async -> String? {
+        guard !token.isEmpty, rec.hasArticles else { return nil }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "shared").appending(path: rec.articleKey))
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return false }
-            struct R: Decodable { let shared: Bool }
-            return (try? JSONDecoder().decode(R.self, from: data))?.shared ?? false
-        } catch { return false }
+            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            struct R: Decodable { let shared: Bool; let shareId: String? }
+            let r = try? JSONDecoder().decode(R.self, from: data)
+            return r?.shared == true ? r?.shareId : nil
+        } catch { return nil }
     }
 
     func fetchPost(_ shareId: String) async -> CommunityFullPost? {
