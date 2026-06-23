@@ -44,6 +44,7 @@ struct Recording: Identifiable, Hashable {
     let isEmpty: Bool            // a `articles/<stem>.empty` marker exists (no usable speech)
     var articleTitle: String?    // first mined article's title; fills the place slot once 已成文
     var uploading: Bool = false  // a local take still in the upload queue (not yet on the server)
+    var processing: Bool = false // server is actively mining this right now (WebSocket push)
 
     var id: String { audioName }
     var stem: String { String(audioName.dropLast(4)) }          // strip .m4a
@@ -91,10 +92,25 @@ final class LibraryStore {
     private let base = URL(string: "https://jianshuo.dev/files/api")!
     private var token: String { AuthStore.shared.bearer }
     private var titleCache: [String: String] = [:]   // articleKey -> first article title
+    private var processingStems: Set<String> = []    // stems currently being mined (WebSocket)
 
     private struct ListResponse: Decodable {
         struct Item: Decodable { let name: String; let uploaded: String? }
         let files: [Item]
+    }
+
+    /// Called by StatusSession when mine.py signals it started processing a stem.
+    func markProcessing(stem: String) {
+        processingStems.insert(stem)
+        if let idx = recordings.firstIndex(where: { $0.stem == stem }), !recordings[idx].hasArticles {
+            recordings[idx].processing = true
+        }
+    }
+
+    /// Called by StatusSession when a stem is done (ready or empty). Refreshes the list.
+    func markDone(stem: String) {
+        processingStems.remove(stem)
+        Task { await load() }
     }
 
     func load() async {
@@ -122,6 +138,19 @@ final class LibraryStore {
                                  isEmpty: names.contains("articles/\(stem).empty"))
             }
             .sorted { $0.audioName > $1.audioName }   // newest first (timestamped names)
+
+            // Re-apply in-flight processing state from WebSocket, and prune stems
+            // that are now done (article or empty marker already landed in R2).
+            for i in recordings.indices {
+                let stem = recordings[i].stem
+                if processingStems.contains(stem) {
+                    if recordings[i].hasArticles || recordings[i].isEmpty {
+                        processingStems.remove(stem)   // done — clear the in-flight marker
+                    } else {
+                        recordings[i].processing = true
+                    }
+                }
+            }
 
             // Apply cached titles immediately, then fetch any missing ones so the
             // 已成文 rows show the article title instead of the place.

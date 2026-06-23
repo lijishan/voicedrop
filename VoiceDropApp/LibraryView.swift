@@ -10,6 +10,7 @@ struct LibraryView: View {
     @State private var store = LibraryStore()
     @State private var uploader = Uploader()
     @State private var community = CommunityStore()
+    @State private var statusSession = StatusSession()
     @State private var tab: HomeTab = .recordings
     @State private var confirmDelete: Recording?
     @State private var confirmReprocess: Recording?
@@ -51,8 +52,16 @@ struct LibraryView: View {
         .fullScreenCover(isPresented: $showRecord) {
             RecordSession { showRecord = false; Task { await refresh() } }
         }
-        .task { await refresh() }
-        .onChange(of: scenePhase) { _, p in if p == .active { Task { await refresh() } } }
+        .task {
+            statusSession.onProcessing = { stem in store.markProcessing(stem: stem) }
+            statusSession.onDone = { stem in store.markDone(stem: stem) }
+            statusSession.connect()
+            await refresh()
+        }
+        .onChange(of: scenePhase) { _, p in
+            if p == .active { statusSession.connect(); Task { await refresh() } }
+            else if p == .background { statusSession.disconnect() }
+        }
         .alert("删除这条录音？", isPresented: .init(
             get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }
         ), presenting: confirmDelete) { rec in
@@ -255,6 +264,11 @@ struct LibraryView: View {
                 .onLongPressGesture { confirmReprocess = rec }
         } else if rec.isEmpty {
             badge(Theme.faint, "无语音")
+        } else if rec.processing {
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini).tint(Theme.accent)
+                Text("处理中").font(.system(size: 12.5)).foregroundStyle(Theme.accent)
+            }
         } else {
             badge(Theme.amberPending, "待处理")
         }
