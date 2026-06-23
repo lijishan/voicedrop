@@ -1,6 +1,6 @@
 # VoiceDrop — project state (read this first)
 
-Last updated: 2026-06-21
+Last updated: 2026-06-23
 
 ## What it is
 
@@ -46,6 +46,8 @@ Keychain) OR a Sign-in-with-Apple session JWT. Server admin token = `FILES_TOKEN
 - `users/<sub>/articles/<stem>.empty` — `{status:"empty",reason:"corrupt|silent|no-speech"}`. **Presence = 无语音.**
 - `users/<sub>/articles/<stem>.srt` — subtitle sidecar.
 - `users/<sub>/CLAUDE.md` — the user's name + style (Settings tab). Appended to the mining prompt.
+- `users/<sub>/WECHAT.json` — `{appid, secret, enabled, thumb_media_id?, coverMediaIds:{<coverName>:<wechatMediaId>}}` (Settings tab). Drives WeChat draft publishing; `coverMediaIds` caches the per-cover WeChat material ids.
+- `assets/wechat-covers/<style>.png` — **shared** cover image set (10: `style01`–`style10`), global (not per-user). One is picked per article by hash. Public via `/files/api/asset/wechat-covers`.
 - `shares/<id>` — value is a full article key; backs the short public share link. `id = HMAC(key)[:10]`.
 - **"processed" = `.json` OR `.empty` exists.** Audio is NEVER auto-deleted; only the user deletes it in-app.
 
@@ -56,6 +58,8 @@ Keychain) OR a Sign-in-with-Apple session JWT. Server admin token = `FILES_TOKEN
 - `GET  list` / `GET download/<key>` / `PUT upload/<key>` / `DELETE file/<key>`.
 - `GET  share/<articleKey>` → `{url:"https://jianshuo.dev/voicedrop/<id>"}` (signs + stores `shares/<id>`).
 - `POST mine` → dispatches `mine.yml` (token = `GH_DISPATCH_TOKEN` Pages secret). Dormant — the app's 加急处理 button was removed; kept for manual/debug use.
+- `POST wechat/<articleKey>` → publish/update a WeChat draft **synchronously** via the VPS relay (see next section). 409 = not configured; 502 relays the real WeChat `{errcode,errmsg}`.
+- `GET asset/wechat-covers` (list) / `GET asset/wechat-covers/<name>` (image bytes) — **public, no auth**; the cover set in the FILES bucket, read by the relay + miner to pick a per-article cover.
 
 `functions/voicedrop/[token].js` — public, unauth. Resolves `shares/<id>` → renders
 that one article as a light-theme HTML page. Non-token segment (e.g. `privacy`) →
@@ -65,7 +69,43 @@ Article pages emit **OG + Twitter Card** tags (`og:title`=article title,
 **`/voicedrop/og.png`** branded banner 1200×630) so a shared link renders a large
 clickable card on X / WeChat. og.png is a static asset in the Pages repo.
 
-Pages secrets: `FILES_TOKEN`, `SESSION_SECRET`, `GH_DISPATCH_TOKEN`.
+Pages secrets: `FILES_TOKEN`, `SESSION_SECRET`, `GH_DISPATCH_TOKEN`, `WECHAT_RELAY_URL`, `WECHAT_RELAY_SECRET`.
+
+## WeChat 公众号 publish — synchronous, via the Tokyo VPS relay
+
+App ⋯ → **发布公众号草稿** publishes a mined article as a WeChat draft and waits for the
+REAL result (`created`/`updated` or the actual `errcode`), not the old fire-and-forget.
+
+Flow: app `POST /files/api/wechat/<articleKey>` → Function reads the article JSON +
+`users/<sub>/WECHAT.json` creds → POSTs `{appid,secret,cover_media_ids,article}` to the relay
+and **awaits** → writes the returned `wechatMediaId`(s) back to the article JSON and the cover
+cache to `WECHAT.json` → returns `{ok,created,updated}` / 502 `{errcode,errmsg}` / 409 not configured.
+Idempotent: an existing draft is updated in place (no dupe).
+
+**Why a relay:** WeChat's API only works from the IP whitelisted on the 公众号 — the Tokyo VPS
+`66.42.45.128` — and Cloudflare `fetch` can't route through a proxy. So a tiny always-on service
+runs ON that VPS and calls `api.weixin.qq.com` directly.
+
+- **Relay** = `wechat-relay` systemd unit on the VPS: `python3.12 /opt/wechat-relay/relay_server.py`
+  bound to `127.0.0.1:8848`, reusing `mining/mine.py` (**needs Python 3.12** — backslash-in-fstring).
+  **Dumb**: no R2 / `FILES_TOKEN`; gets appid/secret + article per request, returns results; the
+  Function persists. Code = `mining/relay_server.py` + `mining/mine.py`. Deploy = `mining/deploy_relay.sh`
+  (`VPS_SSH=root@66.42.45.128 ./mining/deploy_relay.sh` → rsync + restart). First-time provision =
+  `mining/vps/provision.sh` (+ `wechat-relay.service`, `README.md`).
+- **Exposed via a Cloudflare Tunnel** (zero open inbound port): `cloudflared` systemd unit, tunnel
+  `wechat-pub` → proxied CNAME `wechat-pub.jianshuo.dev` → `127.0.0.1:8848`. Inbound auth = header
+  `X-Relay-Secret` (= Pages `WECHAT_RELAY_SECRET` = VPS `/opt/wechat-relay/relay.env`). WeChat egress
+  still exits `66.42.45.128`, so the whitelist is unaffected. **No fallback** by design — failures surface.
+- The old `publish-wechat.yml` GitHub Action is **orphaned for the app path** (the Function no longer
+  dispatches it); still used by the `mine.yml` auto-push path.
+
+**Per-article covers:** `mine.resolve_cover_thumb(token, doc_id, wechat_cfg)` picks one of
+`assets/wechat-covers/style01–10.png` by `hash(doc.id)`, uploads it to WeChat once, and caches the
+material id per cover name in `WECHAT.json.coverMediaIds` (reused across docs sharing a cover). Used by
+**both** the relay (on-demand) and the CI miner auto-push (mine.py:~660). Gray placeholder = fallback
+when the cover set is empty/unreachable.
+
+Infra (tunnel + DNS + VPS service) recorded in the iCloud `IT基础设施-更改记录.html` (2026-06-23).
 
 ## iOS app (`VoiceDropApp/`)
 
