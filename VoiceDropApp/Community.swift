@@ -51,6 +51,7 @@ final class CommunityStore {
     /// updates the snapshot in place; the first-share time is preserved server-side.
     /// If the server returns 403 needs_apple_signin, triggers Apple sign-in and retries once.
     func share(_ rec: Recording) async -> Bool {
+        needsAppleSignIn = false
         guard !token.isEmpty, rec.hasArticles else { return false }
         if await postShare(rec) { return true }
         // Not Apple-verified yet → sign in once and retry.
@@ -83,6 +84,7 @@ final class CommunityStore {
     /// If the server returns 403 needs_apple_signin, triggers Apple sign-in and retries once.
     @discardableResult
     func unshare(_ shareId: String) async -> Bool {
+        needsAppleSignIn = false
         guard !token.isEmpty else { return false }
         posts.removeAll { $0.shareId == shareId }
         if await postUnshare(shareId) { return true }
