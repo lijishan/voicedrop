@@ -38,6 +38,29 @@ struct LibraryView: View {
     }
 
     var body: some View {
+        mainContent
+            .onChange(of: store.recordings) { _, recs in checkPendingReplies(recs) }
+            .alert("删除这条录音？", isPresented: .init(
+                get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }
+            ), presenting: confirmDelete) { rec in
+                Button("删除", role: .destructive) { Task { await store.delete(rec) } }
+                Button("取消", role: .cancel) {}
+            } message: { _ in Text("音频和已挖出的文章都会从云端删除，不可恢复。") }
+            .alert("重新处理这篇文章？", isPresented: .init(
+                get: { confirmReprocess != nil }, set: { if !$0 { confirmReprocess = nil } }
+            ), presenting: confirmReprocess) { rec in
+                Button("删除文章并重新生成", role: .destructive) { Task { await store.deleteArticle(rec) } }
+                Button("取消", role: .cancel) {}
+            } message: { _ in Text("会删掉已生成的文章、保留录音，下个周期重新挖一遍。") }
+            .alert("从社区移除？", isPresented: .init(
+                get: { confirmUnshare != nil }, set: { if !$0 { confirmUnshare = nil } }
+            ), presenting: confirmUnshare) { post in
+                Button("移除", role: .destructive) { Task { await community.unshare(post.shareId) } }
+                Button("取消", role: .cancel) {}
+            } message: { _ in Text("社区里将看不到这篇；你的原文章不受影响，以后还能再分享。") }
+    }
+
+    private var mainContent: some View {
         VStack(spacing: 0) {
             topBar
             tabHeader
@@ -64,33 +87,16 @@ struct LibraryView: View {
             if p == .active { statusSession.connect(); Task { await refresh() } }
             else if p == .background { statusSession.disconnect() }
         }
-        .onChange(of: store.recordings) { _, recs in
-            for rec in recs where rec.hasArticles {
-                let key = "vd.pendingReply.\(rec.audioName)"
-                if let replyTo = UserDefaults.standard.string(forKey: key) {
-                    UserDefaults.standard.removeObject(forKey: key)
-                    Task { _ = await community.share(rec, replyTo: replyTo) }
-                }
+    }
+
+    private func checkPendingReplies(_ recs: [Recording]) {
+        for rec in recs where rec.hasArticles {
+            let key = "vd.pendingReply.\(rec.audioName)"
+            if let replyTo = UserDefaults.standard.string(forKey: key) {
+                UserDefaults.standard.removeObject(forKey: key)
+                Task { _ = await community.share(rec, replyTo: replyTo) }
             }
         }
-        .alert("删除这条录音？", isPresented: .init(
-            get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }
-        ), presenting: confirmDelete) { rec in
-            Button("删除", role: .destructive) { Task { await store.delete(rec) } }
-            Button("取消", role: .cancel) {}
-        } message: { _ in Text("音频和已挖出的文章都会从云端删除，不可恢复。") }
-        .alert("重新处理这篇文章？", isPresented: .init(
-            get: { confirmReprocess != nil }, set: { if !$0 { confirmReprocess = nil } }
-        ), presenting: confirmReprocess) { rec in
-            Button("删除文章并重新生成", role: .destructive) { Task { await store.deleteArticle(rec) } }
-            Button("取消", role: .cancel) {}
-        } message: { _ in Text("会删掉已生成的文章、保留录音，下个周期重新挖一遍。") }
-        .alert("从社区移除？", isPresented: .init(
-            get: { confirmUnshare != nil }, set: { if !$0 { confirmUnshare = nil } }
-        ), presenting: confirmUnshare) { post in
-            Button("移除", role: .destructive) { Task { await community.unshare(post.shareId) } }
-            Button("取消", role: .cancel) {}
-        } message: { _ in Text("社区里将看不到这篇；你的原文章不受影响，以后还能再分享。") }
     }
 
     private func responseRecorded() { Task { await refresh() } }
