@@ -52,26 +52,32 @@ struct Recording: Identifiable, Hashable {
     var emptyKey: String { "articles/\(stem).empty" }
     var srtKey: String { "articles/\(stem).srt" }
 
-    /// "6月18日 14:30 · Xuhui" style label parsed from the rich filename. Once the
-    /// recording is 已成文, the place slot is replaced by the article's title.
-    /// Falls back to the stem when the name doesn't match.
+    /// "6月18日 14:30 · Xuhui" style label — kept for detail views and export.
     var displayTitle: String {
+        let dt = dateTimeLabel.map { $0 + " · " } ?? ""
+        return dt + rowTitle
+    }
+
+    /// First line of a list row: article title when 已成文, place name otherwise, stem as fallback.
+    var rowTitle: String {
+        if let t = articleTitle, !t.isEmpty { return t }
         let p = stem.components(separatedBy: "-")
-        // VoiceDrop - YYYY - MM - DD - HHMMSS - 0m33s - Thu - Period - City - District
-        guard p.count >= 5, p[0] == "VoiceDrop", p[1].count == 4 else {
-            return articleTitle ?? stem
-        }
+        guard p.count >= 5, p[0] == "VoiceDrop", p[1].count == 4 else { return stem }
+        let place = p.count >= 10 ? p[9] : (p.count >= 9 ? p[8] : "")
+        return place.isEmpty ? stem : place
+    }
+
+    /// Second line of a list row: "6月18日 14:30" parsed from the filename.
+    var dateTimeLabel: String? {
+        let p = stem.components(separatedBy: "-")
+        guard p.count >= 5, p[0] == "VoiceDrop", p[1].count == 4 else { return nil }
         var bits: [String] = []
         if let mo = Int(p[2]), let da = Int(p[3]) { bits.append("\(mo)月\(da)日") }
-        if p.count >= 5, p[4].count == 6 {
+        if p[4].count == 6 {
             let t = p[4]
             bits.append("\(t.prefix(2)):\(t.dropFirst(2).prefix(2))")
         }
-        // Prefer the article title (已成文); otherwise the parsed place.
-        let place = p.count >= 10 ? p[9] : (p.count >= 9 ? p[8] : "")
-        let suffix = (articleTitle?.isEmpty == false) ? articleTitle! : place
-        if !suffix.isEmpty { bits.append(suffix) }
-        return bits.isEmpty ? stem : bits.joined(separator: " · ")
+        return bits.isEmpty ? nil : bits.joined(separator: " ")
     }
 
     /// "0m33s"-style duration field if present.

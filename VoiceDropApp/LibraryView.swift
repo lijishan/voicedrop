@@ -251,12 +251,15 @@ struct LibraryView: View {
                 .overlay(WaveformBars(color: empty ? Color(hex: "C3B9A8") : Theme.recordRed,
                                       heights: [11, 19, 14], barWidth: 3, spacing: 2.5))
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text(rec.displayTitle).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(rec.rowTitle).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
                     .lineLimit(1).truncationMode(.tail)
                 HStack(spacing: 9) {
+                    if let dt = rec.dateTimeLabel {
+                        Text(dt).font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.metaChrome)
+                    }
                     if let d = rec.durationLabel {
-                        Text(d).font(.system(size: 13).monospacedDigit()).foregroundStyle(Theme.metaChrome)
+                        Text(d).font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.metaChrome)
                     }
                     statusBadge(rec)
                 }
