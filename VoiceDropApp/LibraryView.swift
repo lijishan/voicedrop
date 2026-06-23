@@ -47,8 +47,10 @@ struct LibraryView: View {
         .overlay(alignment: .bottom) { if tab == .recordings { recordButton } }
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $selectedRec) { rec in RecordingDetailView(store: store, recording: rec) }
-        .navigationDestination(item: $selectedPost) { post in CommunityPostView(store: community, post: post) }
-        .navigationDestination(isPresented: $showSettings) { SettingsView(libraryStore: store) }
+        .navigationDestination(item: $selectedPost) { post in
+            CommunityPostView(store: community, post: post, onRecordFinished: { Task { await refresh() } })
+        }
+        .navigationDestination(isPresented: $showSettings) { SettingsView() }
         .fullScreenCover(isPresented: $showRecord) {
             RecordSession { showRecord = false; Task { await refresh() } }
         }
@@ -61,6 +63,15 @@ struct LibraryView: View {
         .onChange(of: scenePhase) { _, p in
             if p == .active { statusSession.connect(); Task { await refresh() } }
             else if p == .background { statusSession.disconnect() }
+        }
+        .onChange(of: store.recordings) { _, recs in
+            for rec in recs where rec.hasArticles {
+                let key = "vd.pendingReply.\(rec.audioName)"
+                if let replyTo = UserDefaults.standard.string(forKey: key) {
+                    UserDefaults.standard.removeObject(forKey: key)
+                    Task { _ = await community.share(rec, replyTo: replyTo) }
+                }
+            }
         }
         .alert("删除这条录音？", isPresented: .init(
             get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }

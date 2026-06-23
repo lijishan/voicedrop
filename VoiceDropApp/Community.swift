@@ -10,6 +10,7 @@ struct CommunityPost: Decodable, Identifiable, Hashable {
     let updatedAt: Double?
     let count: Int?
     let mine: Bool?                 // owned by the current user (can un-share)
+    let replyTo: String?            // shareId this post is replying to, if any
     var id: String { shareId }
 }
 
@@ -20,15 +21,7 @@ struct CommunityFullPost: Decodable {
     let title: String?
     let articles: [MinedArticle]?
     let firstSharedAt: Double?
-}
-
-/// One voice comment on a community post.
-struct CommunityComment: Decodable, Identifiable {
-    let commentId: String
-    let author: String?
-    let text: String
-    let createdAt: Double?
-    var id: String { commentId }
+    let replyTo: String?
 }
 
 @MainActor
@@ -41,7 +34,7 @@ final class CommunityStore {
     private let base = URL(string: "https://jianshuo.dev/files/api")!
     private var token: String { AuthStore.shared.bearer }
 
-    /// All shared posts, newest-first by first-share time (server-sorted).
+    /// All shared posts, newest-first by first-share time.
     func load() async {
         guard !token.isEmpty else { return }
         loading = true; error = nil
@@ -56,63 +49,51 @@ final class CommunityStore {
         } catch { self.error = error.localizedDescription }
     }
 
-    /// Share (or re-share) one of the user's articles to the community.
-    /// Returns the shareId on success (needed for unshare), nil on failure.
-    /// If the server returns 403 needs_apple_signin, triggers Apple sign-in and retries once.
-    func share(_ rec: Recording) async -> String? {
+    /// Share (or re-share) one of the user's articles. `replyTo` links this post to another.
+    func share(_ rec: Recording, replyTo: String? = nil) async -> Bool {
         needsAppleSignIn = false
-        guard !token.isEmpty, rec.hasArticles else { return nil }
-        if let id = await postShare(rec) { return id }
+        guard !token.isEmpty, rec.hasArticles else { return false }
+        if await postShare(rec, replyTo: replyTo) { return true }
         if needsAppleSignIn {
             await AuthStore.shared.signInWithApple()
-            guard AuthStore.shared.isAuthenticated else { return nil }
-            return await postShare(rec)
+            guard AuthStore.shared.isAuthenticated else { return false }
+            return await postShare(rec, replyTo: replyTo)
         }
-        return nil
+        return false
     }
 
     private var needsAppleSignIn = false
 
-    private func postShare(_ rec: Recording) async -> String? {
+    private func postShare(_ rec: Recording, replyTo: String?) async -> Bool {
         var req = URLRequest(url: base.appending(path: "community").appending(path: "share").appending(path: rec.articleKey))
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let replyTo {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONEncoder().encode(["replyTo": replyTo])
+        }
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            if (200..<300).contains(code) {
-                needsAppleSignIn = false
-                struct R: Decodable { let shareId: String }
-                return (try? JSONDecoder().decode(R.self, from: data))?.shareId
-            }
+            if (200..<300).contains(code) { needsAppleSignIn = false; return true }
             needsAppleSignIn = (code == 403) &&
-                ((try? JSONDecoder().decode([String:String].self, from: data))?["error"] == "needs_apple_signin")
-            return nil
-        } catch { return nil }
+                ((try? JSONDecoder().decode([String: String].self, from: data))?["error"] == "needs_apple_signin")
+            return false
+        } catch { return false }
     }
 
-    /// Un-share (delete) one of the user's own community posts. Removed from the
-    /// list immediately (optimistic); reloads if the server rejects it.
-    /// If the server returns 403 needs_apple_signin, triggers Apple sign-in and retries once.
     @discardableResult
     func unshare(_ shareId: String) async -> Bool {
         needsAppleSignIn = false
         guard !token.isEmpty else { return false }
         posts.removeAll { $0.shareId == shareId }
         if await postUnshare(shareId) { return true }
-        // 403 needs sign-in → sign in once and retry
         if needsAppleSignIn {
             await AuthStore.shared.signInWithApple()
-            if AuthStore.shared.isAuthenticated {
-                if await postUnshare(shareId) { return true }
-            }
-            // Sign-in was dismissed or retry failed — restore the optimistically-removed post
-            await load()
-            return false
+            if AuthStore.shared.isAuthenticated { if await postUnshare(shareId) { return true } }
+            await load(); return false
         }
-        // Hard failure (non-403 or network error) — restore
-        await load()
-        return false
+        await load(); return false
     }
 
     private func postUnshare(_ shareId: String) async -> Bool {
@@ -124,24 +105,21 @@ final class CommunityStore {
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if (200..<300).contains(code) { needsAppleSignIn = false; return true }
             needsAppleSignIn = (code == 403) &&
-                ((try? JSONDecoder().decode([String:String].self, from: data))?["error"] == "needs_apple_signin")
+                ((try? JSONDecoder().decode([String: String].self, from: data))?["error"] == "needs_apple_signin")
             return false
         } catch { return false }
     }
 
-    /// Returns the shareId if this article is currently shared to the community, nil if not.
-    /// The shareId is needed to call unshare() from the detail view.
-    func sharedShareId(_ rec: Recording) async -> String? {
-        guard !token.isEmpty, rec.hasArticles else { return nil }
+    func isShared(_ rec: Recording) async -> Bool {
+        guard !token.isEmpty, rec.hasArticles else { return false }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "shared").appending(path: rec.articleKey))
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
-            struct R: Decodable { let shared: Bool; let shareId: String? }
-            let r = try? JSONDecoder().decode(R.self, from: data)
-            return r?.shared == true ? r?.shareId : nil
-        } catch { return nil }
+            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return false }
+            struct R: Decodable { let shared: Bool }
+            return (try? JSONDecoder().decode(R.self, from: data))?.shared ?? false
+        } catch { return false }
     }
 
     func fetchPost(_ shareId: String) async -> CommunityFullPost? {
@@ -155,35 +133,21 @@ final class CommunityStore {
         } catch { return nil }
     }
 
-    func loadComments(_ shareId: String) async -> [CommunityComment] {
+    /// Posts that are responses to `shareId`, oldest-first.
+    func loadReplies(_ shareId: String) async -> [CommunityPost] {
         guard !token.isEmpty else { return [] }
-        var req = URLRequest(url: base.appending(path: "community").appending(path: "comments").appending(path: shareId))
+        var req = URLRequest(url: base.appending(path: "community").appending(path: "replies").appending(path: shareId))
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return [] }
-            struct R: Decodable { let comments: [CommunityComment] }
-            return (try? JSONDecoder().decode(R.self, from: data))?.comments ?? []
+            struct R: Decodable { let posts: [CommunityPost] }
+            return (try? JSONDecoder().decode(R.self, from: data))?.posts ?? []
         } catch { return [] }
-    }
-
-    func postComment(_ text: String, to shareId: String) async -> CommunityComment? {
-        guard !token.isEmpty else { return nil }
-        var req = URLRequest(url: base.appending(path: "community").appending(path: "comment").appending(path: shareId))
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONEncoder().encode(["text": text])
-        do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
-            struct R: Decodable { let comment: CommunityComment }
-            return (try? JSONDecoder().decode(R.self, from: data))?.comment
-        } catch { return nil }
     }
 }
 
-/// Format a ms-epoch share time as "6月22日" (or a year if not this year).
+/// Format a ms-epoch time as "6月22日" (or include year if not this year).
 func communityDate(_ ms: Double?) -> String {
     guard let ms else { return "" }
     let date = Date(timeIntervalSince1970: ms / 1000)
@@ -193,34 +157,37 @@ func communityDate(_ ms: Double?) -> String {
     return f.string(from: date)
 }
 
-// MARK: - Community read view (read-only article + voice comments)
+// MARK: - Community post view
 
 struct CommunityPostView: View {
     let store: CommunityStore
     let post: CommunityPost
+    /// Called after the user finishes recording a response (trigger library refresh + upload).
+    var onRecordFinished: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
+
     @State private var full: CommunityFullPost?
     @State private var loading = true
     @State private var articleIndex = 0
-
-    @State private var comments: [CommunityComment] = []
-    @State private var dictation = SpeechDictation()
-    @State private var willCancel = false
-    @State private var posting = false
+    @State private var replies: [CommunityPost] = []
+    @State private var selectedReply: CommunityPost?
+    @State private var sharePayload: SharePayload?
     @State private var toast: String?
+
+    // Recording a response
+    @State private var recorder = AudioRecorder()
+    @State private var location = LocationTagger()
+    @State private var recorderPhase: RecorderPhase = .idle
+    @State private var pulse = false
+
+    enum RecorderPhase { case idle, recording }
 
     private var articles: [MinedArticle] { full?.articles ?? [] }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                NavSquare(systemName: "chevron.left", stroke: Theme.inkRead, border: Theme.borderRead) { dismiss() }
-                    .accessibilityLabel("返回")
-                Spacer()
-            }
-            .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 8)
-
+            navBar
             if loading {
                 Spacer(); ProgressView().tint(Theme.accent); Spacer()
             } else if articles.isEmpty {
@@ -240,9 +207,7 @@ struct CommunityPostView: View {
                                 Text(communityDate(full?.firstSharedAt)).font(.system(size: 13)).foregroundStyle(Theme.metaRead)
                             }
                             .padding(.top, 8)
-
                             if articles.count > 1 { chipRow.padding(.top, 16) }
-
                             Text((try? AttributedString(markdown: a.body, options: .init(
                                 interpretedSyntax: .inlineOnlyPreservingWhitespace,
                                 failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(a.body))
@@ -251,23 +216,59 @@ struct CommunityPostView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.top, articles.count > 1 ? 16 : 20)
                         }
-                        commentsSection
+                        repliesSection
                     }
                     .padding(.horizontal, 20)
                 }
-                .contentMargins(.bottom, 80, for: .scrollContent)
+                .contentMargins(.bottom, recorderPhase == .recording ? 76 : 20, for: .scrollContent)
+                .animation(.easeInOut(duration: 0.2), value: recorderPhase)
             }
         }
         .background(Theme.readBG.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .overlay(alignment: .bottom) { voiceCommentBar }
+        .overlay(alignment: .bottom) { if recorderPhase == .recording { recordingBar } }
         .overlay(alignment: .bottom) { toastView }
+        .navigationDestination(item: $selectedReply) { reply in
+            CommunityPostView(store: store, post: reply, onRecordFinished: onRecordFinished)
+        }
+        .sheet(item: $sharePayload) { ShareSheet(items: [$0.text]) }
         .task {
             full = await store.fetchPost(post.shareId)
             loading = false
-            comments = await store.loadComments(post.shareId)
-            await dictation.requestAuth()
+            replies = await store.loadReplies(post.shareId)
         }
+        .onDisappear { _ = recorder.stop() }
+    }
+
+    // MARK: Nav bar (⋯ menu)
+
+    private var navBar: some View {
+        HStack {
+            NavSquare(systemName: "chevron.left", stroke: Theme.inkRead, border: Theme.borderRead) { dismiss() }
+                .accessibilityLabel("返回")
+            Spacer()
+            Menu {
+                Button { Task { await startResponse() } } label: {
+                    Label("写回应", systemImage: "mic")
+                }
+                Button { sharePost() } label: {
+                    Label("分享", systemImage: "square.and.arrow.up")
+                }
+                Button(role: .destructive) { showToast("举报功能即将上线") } label: {
+                    Label("举报", systemImage: "flag")
+                }
+            } label: {
+                RoundedRectangle(cornerRadius: Theme.R.nav)
+                    .fill(Theme.ink)
+                    .frame(width: 38, height: 38)
+                    .overlay {
+                        Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                    }
+                    .navButtonShadow()
+            }
+            .accessibilityLabel("更多")
+        }
+        .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 8)
     }
 
     // MARK: Article chips
@@ -292,117 +293,145 @@ struct CommunityPostView: View {
         }
     }
 
-    // MARK: Comments section (inline, after article body)
+    // MARK: Replies section
 
-    private var commentsSection: some View {
+    private var repliesSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             Rectangle().fill(Theme.borderRead).frame(height: 1).padding(.top, 32)
-            Text("评论").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.secondary)
-                .padding(.top, 16).padding(.bottom, 12)
-            if comments.isEmpty {
-                Text("还没有评论，按住下方麦克风说第一条").font(.system(size: 14))
-                    .foregroundStyle(Theme.faint).padding(.bottom, 8)
+            HStack(spacing: 6) {
+                Text("回应").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.secondary)
+                if !replies.isEmpty {
+                    Text("\(replies.count)").font(.system(size: 13)).foregroundStyle(Theme.faint)
+                }
+            }
+            .padding(.top, 16).padding(.bottom, 12)
+            if replies.isEmpty {
+                Text("还没有回应，点右上角 ⋯ 写第一篇").font(.system(size: 14))
+                    .foregroundStyle(Theme.faint).padding(.bottom, 20)
             } else {
-                ForEach(comments) { c in
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 6) {
-                            Text(c.author ?? "匿名").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accent)
-                            Text(communityDate(c.createdAt)).font(.system(size: 12)).foregroundStyle(Theme.metaRead)
+                ForEach(replies) { reply in
+                    Button { selectedReply = reply } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 6) {
+                                Text(reply.author ?? "匿名")
+                                    .font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accent)
+                                Text(communityDate(reply.firstSharedAt))
+                                    .font(.system(size: 12)).foregroundStyle(Theme.metaRead)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11)).foregroundStyle(Theme.faint)
+                            }
+                            if let title = reply.title {
+                                Text(title).font(.system(size: 15)).foregroundStyle(Theme.bodyRead)
+                                    .lineLimit(2).multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                         }
-                        Text(c.text).font(.system(size: 15)).foregroundStyle(Theme.bodyRead)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(Rectangle().fill(Theme.borderRead).frame(height: 0.5), alignment: .bottom)
                     }
-                    .padding(.vertical, 10)
-                    .overlay(Rectangle().fill(Theme.borderRead).frame(height: 0.5), alignment: .bottom)
+                    .buttonStyle(.plain)
                 }
             }
         }
     }
 
-    // MARK: Floating voice comment bar
+    // MARK: Recording bar (visible while recording a response)
 
-    private var voiceCommentBar: some View {
-        VStack(spacing: 8) {
-            if dictation.isRecording { transcriptBubble(dictation.transcript) }
-            micPill
+    private var recordingBar: some View {
+        HStack(spacing: 14) {
+            HStack(spacing: 6) {
+                Circle().fill(Theme.recordRed).frame(width: 8, height: 8)
+                    .opacity(pulse ? 1 : 0.35)
+                    .animation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true), value: pulse)
+                Text(timeString(recorder.elapsed))
+                    .font(.system(size: 15, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+            }
+            Spacer()
+            miniWaveform
+            Spacer()
+            Button { Task { await stopResponse() } } label: {
+                Circle().fill(Theme.card).frame(width: 48, height: 48)
+                    .overlay(Circle().stroke(Color(hex: "E8DECF"), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 5).fill(Theme.recordRed).frame(width: 18, height: 18))
+                    .shadow(color: .black.opacity(0.06), radius: 5, x: 0, y: 2)
+            }
+            .buttonStyle(.plain).accessibilityLabel("停止录音")
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 12)
-        .animation(.easeInOut(duration: 0.18), value: dictation.isRecording)
+        .padding(.horizontal, 20).padding(.vertical, 14)
+        .background(Theme.card)
+        .overlay(Rectangle().fill(Theme.borderRead).frame(height: 1), alignment: .top)
+        .onAppear { pulse = true }
+        .onDisappear { pulse = false }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
-    private var micPill: some View {
-        HStack(spacing: 7) {
-            if dictation.isRecording {
-                Image(systemName: "waveform").font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .symbolEffect(.pulse, options: .repeating)
-                Text(willCancel ? "上滑取消 · 松开放弃" : "松开 发送 · 上滑取消")
-                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
-            } else if posting {
-                ProgressView().tint(Theme.accent).scaleEffect(0.8)
-                Text("发送中…").font(.system(size: 15)).foregroundStyle(Theme.secondary)
-            } else {
-                Image(systemName: "mic.fill").font(.system(size: 14)).foregroundStyle(Theme.ink)
-                Text("按住说评论").font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.ink)
+    private var miniWaveform: some View {
+        let bars: [Double] = [0.30, 0.56, 0.82, 0.48, 0.95, 0.65, 0.38, 0.74, 0.52]
+        return HStack(alignment: .bottom, spacing: 2) {
+            ForEach(bars.indices, id: \.self) { i in
+                let frac = bars[i] * (0.12 + recorder.level * 0.88)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(frac > 0.5 ? Theme.recordRed : Color(hex: "EBA89F"))
+                    .frame(width: 3, height: max(3, 28 * frac))
             }
         }
-        .padding(.horizontal, 22).padding(.vertical, 12)
-        .background(RoundedRectangle(cornerRadius: 24)
-            .fill(dictation.isRecording ? Theme.accent : Theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 24)
-            .stroke(dictation.isRecording ? Color(hex: "C94A2E") : Theme.borderRead, lineWidth: 1))
-        .shadow(color: dictation.isRecording
-            ? Color(.sRGB, red: 216/255, green: 89/255, blue: 59/255, opacity: 0.30) : .black.opacity(0.08),
-                radius: 8, x: 0, y: 3)
-        .contentShape(RoundedRectangle(cornerRadius: 24))
-        .gesture(holdGesture())
-        .disabled(posting)
-        .animation(.easeInOut(duration: 0.15), value: dictation.isRecording)
+        .frame(height: 28)
+        .animation(.easeOut(duration: 0.1), value: recorder.level)
     }
 
-    private func transcriptBubble(_ text: String) -> some View {
-        VStack(spacing: 0) {
-            Text(text.isEmpty ? "在听…" : text)
-                .font(.system(size: 15))
-                .foregroundStyle(text.isEmpty ? Color(hex: "B6AD9E") : Color(hex: "FBF6EE"))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-                .background(Color(hex: "2E2823"), in: RoundedRectangle(cornerRadius: 14))
-            DownTriangle().fill(Color(hex: "2E2823")).frame(width: 16, height: 8)
-                .padding(.leading, 30).frame(maxWidth: .infinity, alignment: .leading)
+    // MARK: Response recording flow
+
+    private func startResponse() async {
+        guard recorderPhase == .idle else { return }
+        let granted = await AudioRecorder.ensurePermission()
+        guard granted else { showToast("请在设置里开启麦克风权限"); return }
+        location.start()
+        do {
+            try recorder.start()
+            withAnimation { recorderPhase = .recording }
+        } catch {
+            showToast("无法开始录音")
         }
     }
 
-    private func holdGesture() -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { v in
-                if dictation.authorized == nil { Task { await dictation.requestAuth() }; return }
-                guard dictation.authorized == true else { return }
-                if !dictation.isRecording { dictation.start() }
-                willCancel = v.translation.height < -60
-            }
-            .onEnded { v in
-                guard dictation.isRecording else { willCancel = false; return }
-                let cancel = v.translation.height < -60
-                willCancel = false
-                if cancel { dictation.stop(); return }
-                Task {
-                    let text = (await dictation.stopAndGetFinal()).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !text.isEmpty { await submitComment(text) }
-                }
-            }
+    private func stopResponse() async {
+        guard let take = recorder.stop() else { withAnimation { recorderPhase = .idle }; return }
+        withAnimation { recorderPhase = .idle }
+        await promote(take)
+        onRecordFinished?()
+        dismiss()
     }
 
-    private func submitComment(_ text: String) async {
-        posting = true
-        if let c = await store.postComment(text, to: post.shareId) {
-            comments.append(c)
-            showToast("评论已发送")
-        } else {
-            showToast("发送失败，请稍后再试")
+    private func promote(_ take: AudioRecorder.Recording) async {
+        let place = await location.placeTag()
+        let finalName = RecordingName.make(start: take.start, duration: take.duration, place: place)
+        var finalURL = AudioRecorder.documentsDir.appending(path: finalName)
+        do {
+            try FileManager.default.moveItem(at: take.url, to: finalURL)
+        } catch {
+            let fallback = "VoiceDrop-\(RecordingName.timestamp(take.start)).m4a"
+            let fallbackURL = AudioRecorder.documentsDir.appending(path: fallback)
+            if (try? FileManager.default.moveItem(at: take.url, to: fallbackURL)) != nil {
+                finalURL = fallbackURL
+            }
         }
-        posting = false
+        // LibraryView.onChange picks this up when the article is mined and auto-shares with replyTo.
+        UserDefaults.standard.set(post.shareId, forKey: "vd.pendingReply.\(finalURL.lastPathComponent)")
+        if Prefs.shared.iCloudBackup {
+            let toArchive = finalURL
+            await Task.detached { ICloudArchive.save(toArchive) }.value
+        }
+    }
+
+    // MARK: Share this post
+
+    private func sharePost() {
+        let title = full?.articles?.first?.title ?? post.title ?? "VoiceDrop 分享"
+        let author = full?.author ?? post.author ?? "匿名"
+        sharePayload = SharePayload(text: "《\(title)》— \(author)\n来自 VoiceDrop 社区")
     }
 
     // MARK: Toast
@@ -422,9 +451,13 @@ struct CommunityPostView: View {
                 .padding(.horizontal, 18).padding(.vertical, 12)
                 .background(.ultraThinMaterial, in: Capsule())
                 .overlay(Capsule().stroke(Theme.borderRead, lineWidth: 1))
-                .padding(.bottom, 96)
+                .padding(.bottom, recorderPhase == .recording ? 90 : 32)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
         }
+    }
+
+    private func timeString(_ t: TimeInterval) -> String {
+        let s = Int(t); return String(format: "%02d:%02d", s / 60, s % 60)
     }
 }
 
