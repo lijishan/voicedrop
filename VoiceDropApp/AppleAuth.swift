@@ -68,6 +68,7 @@ final class AuthStore {
         var req = URLRequest(url: authURL)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(anonToken)", forHTTPHeaderField: "Authorization")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["identityToken": identityToken])
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
