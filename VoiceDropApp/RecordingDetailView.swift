@@ -1,6 +1,13 @@
 import SwiftUI
 import UIKit
 
+/// A transient one-line reply from the editing agent.
+struct AgentReply: Identifiable, Equatable {
+    let id = UUID()
+    let text: String
+    let ok: Bool
+}
+
 /// 成文阅读：听录音 + 读挖出的文章 + 一键发布。暖灰阅读底（#F0EDE7）。
 /// 右上角 ⋯ 菜单（发布公众号草稿 / 分享）；底部常驻一条微信式按住说话 bar。
 struct RecordingDetailView: View {
@@ -28,6 +35,7 @@ struct RecordingDetailView: View {
     @State private var communityShareId: String?    // shareId when shared (needed for unshare)
 
     // Live voice editing — persistent push-to-talk bar.
+    @State private var agentReply: AgentReply?
     @State private var agent = ArticleAgentSession()
     @State private var dictation = SpeechDictation()
     @State private var willCancel = false           // slid finger up past threshold
@@ -85,6 +93,16 @@ struct RecordingDetailView: View {
             doc = newDoc
             articleIndex = min(articleIndex, max(0, newDoc.resolvedArticles.count - 1))
             showToast("已更新")
+        }
+        agent.onReply = { text, ok in
+            let reply = AgentReply(text: text, ok: ok)
+            agentReply = reply
+            if ok {
+                Task {
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    if agentReply?.id == reply.id { agentReply = nil }
+                }
+            }
         }
         agent.connect(recording)
         await dictation.requestAuth()
@@ -304,6 +322,7 @@ struct RecordingDetailView: View {
         let working = agent.state == .working
         let firstId = agent.queue.first?.id
         return VStack(spacing: 8) {
+            if let reply = agentReply { replyBubble(reply) }
             // Pending edits pile up here — newest on top, the one in flight sits
             // just above the button and drains first; each builds on the last.
             ForEach(agent.queue.reversed()) { req in
@@ -318,6 +337,7 @@ struct RecordingDetailView: View {
         .frame(maxWidth: .infinity)
         .animation(.easeInOut(duration: 0.22), value: agent.queue)
         .animation(.easeInOut(duration: 0.18), value: recording)
+        .animation(.easeInOut(duration: 0.22), value: agentReply)
     }
 
     /// One queued instruction. The in-flight head is highlighted; the rest wait.
@@ -368,6 +388,29 @@ struct RecordingDetailView: View {
                 radius: 7, x: 0, y: 4)
         .contentShape(RoundedRectangle(cornerRadius: Theme.R.primary))
         .gesture(holdGesture())
+    }
+
+    /// The agent's transient one-line reply. Success: neutral light card (auto-fades).
+    /// Error: muted-red border + warning glyph, sticky until tapped.
+    private func replyBubble(_ reply: AgentReply) -> some View {
+        let warn = Color(hex: "C0392B")
+        return HStack(spacing: 8) {
+            Image(systemName: reply.ok ? "sparkles" : "exclamationmark.triangle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(reply.ok ? Theme.accent : warn)
+            Text(reply.text)
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 13))
+        .overlay(RoundedRectangle(cornerRadius: 13)
+            .stroke(reply.ok ? Theme.borderRead : warn.opacity(0.7), lineWidth: 1))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .contentShape(RoundedRectangle(cornerRadius: 13))
+        .onTapGesture { if !reply.ok { agentReply = nil } }
     }
 
     /// Dark bubble above the bar showing the live transcript (text only).

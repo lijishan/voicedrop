@@ -26,6 +26,10 @@ final class ArticleAgentSession {
     /// Called on the main actor whenever the server pushes a rewritten article.
     var onUpdate: ((ArticleDoc) -> Void)?
 
+    /// Called on the main actor when the agent sends a one-line reply (text + ok).
+    /// Display-only — does not affect the edit queue.
+    var onReply: ((String, Bool) -> Void)?
+
     private var task: URLSessionWebSocketTask?
     private var session: URLSession?
     private var rec: Recording?
@@ -128,6 +132,11 @@ final class ArticleAgentSession {
             processing = false
             state = queue.isEmpty ? .idle : .working
             pump()                                                  // start the next, if any
+        case "reply":
+            if let text = obj["text"] as? String, !text.isEmpty {
+                let ok = obj["ok"] as? Bool ?? true
+                onReply?(text, ok)
+            }
         case "error":
             failHead((obj["message"] as? String) ?? "出错了")
         default:
