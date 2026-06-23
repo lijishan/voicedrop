@@ -79,6 +79,28 @@ struct AccountView: View {
                 tokenCopied = true
                 Task { try? await Task.sleep(nanoseconds: 1_800_000_000); tokenCopied = false }
             }
+
+            Rectangle().fill(Theme.dividerInCard).frame(height: 1)
+
+            if auth.isAuthenticated {
+                HStack {
+                    Label("已用 Apple 登录", systemImage: "applelogo")
+                        .font(.system(size: 14)).foregroundStyle(Theme.secondary)
+                    Spacer()
+                    Button("退出登录") { auth.signOut() }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .buttonStyle(.plain)
+                }
+            } else {
+                Button {
+                    Task { await auth.signInWithApple() }
+                } label: {
+                    Label("用 Apple 登录（同步设备 · 参与社区）", systemImage: "applelogo")
+                        .font(.system(size: 15)).foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(18)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: Theme.R.card))

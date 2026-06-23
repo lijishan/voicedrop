@@ -2,6 +2,8 @@ import Foundation
 import Observation
 import Security
 import CryptoKit
+import AuthenticationServices
+import UIKit
 
 /// Holds the per-user session token minted by jianshuo.dev/files after a
 /// "Sign in with Apple" exchange. The token is the bearer credential for this
@@ -37,6 +39,8 @@ final class AuthStore {
 
     /// Where the session is exchanged. Public URL, not a secret.
     private let authURL = URL(string: "https://jianshuo.dev/files/api/auth/apple")!
+
+    private var appleCoordinator: AppleSignInCoordinator?
 
     private let service = "dev.jianshuo.voicedrop"
     private let sessionAccount = "session"
@@ -96,6 +100,32 @@ final class AuthStore {
         session = nil
     }
 
+    /// Present the system Sign-in-with-Apple sheet, then exchange the identity
+    /// token for a session JWT bound to this user's existing anon box.
+    func signInWithApple() async {
+        let req = ASAuthorizationAppleIDProvider().createRequest()
+        req.requestedScopes = [.fullName]
+        do {
+            let auth = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ASAuthorization, Error>) in
+                let c = AppleSignInCoordinator(cont)
+                appleCoordinator = c
+                let ctrl = ASAuthorizationController(authorizationRequests: [req])
+                ctrl.delegate = c
+                ctrl.presentationContextProvider = c
+                ctrl.performRequests()
+            }
+            guard let cred = auth.credential as? ASAuthorizationAppleIDCredential,
+                  let tokenData = cred.identityToken,
+                  let idToken = String(data: tokenData, encoding: .utf8) else {
+                lastError = "登录失败（无身份令牌）"; return
+            }
+            await exchange(identityToken: idToken)
+        } catch {
+            lastError = error.localizedDescription
+        }
+        appleCoordinator = nil
+    }
+
     /// Reset the anonymous identity: mint a brand-new token. The old
     /// `users/<id>/` space (recordings + articles) becomes unreachable — this is
     /// irreversible. Used by the account page's 重置身份.
@@ -138,5 +168,17 @@ final class AuthStore {
 
     private func keychainDelete(account: String) {
         SecItemDelete(baseQuery(account) as CFDictionary)
+    }
+}
+
+// MARK: - Sign-in-with-Apple coordinator
+
+private final class AppleSignInCoordinator: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding, @unchecked Sendable {
+    let cont: CheckedContinuation<ASAuthorization, Error>
+    init(_ cont: CheckedContinuation<ASAuthorization, Error>) { self.cont = cont }
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) { cont.resume(returning: authorization) }
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) { cont.resume(throwing: error) }
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? ASPresentationAnchor()
     }
 }
