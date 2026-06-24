@@ -704,7 +704,7 @@ def main():
         # Guard against R2 list lag: a concurrent run may have written the article
         # JSON just before our list call. Verify with a direct HEAD (strongly consistent).
         if api_exists(article_key_for(audio)) or api_exists(empty_key_for(audio)):
-            log(f"   skip (processed by concurrent run, list lagged)")
+            log(f"   skip (article exists — list was truncated or lagged)")
             continue
         notify(audio, "processing")   # app: 待处理 → 处理中
         try:
