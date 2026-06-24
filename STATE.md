@@ -1,6 +1,6 @@
 # VoiceDrop — project state (read this first)
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 ## What it is
 
@@ -43,15 +43,18 @@ Keychain) OR a Sign-in-with-Apple session JWT. Server admin token = `FILES_TOKEN
 ## R2 layout & marker conventions (the contract everyone shares)
 
 - `users/<sub>/VoiceDrop-<ts>-<dur>-<weekday>-<period>[-<city>-<district>].m4a` — audio (ASCII names).
-- `users/<sub>/articles/<stem>.json` — mined article(s), v2 schema `{schema,id,sourceAudio,createdAt,transcript,srt,articles:[{title,body}],status,model}`. **Presence = 已成文.**
+- `users/<sub>/articles/<stem>.json` — mined article(s), v2 schema `{schema,id,sourceAudio,createdAt,transcript,srt,articles:[{title,body}],status,model,photos?}`. **Presence = 已成文.** `photos` (optional) = relative R2 keys of session photos, e.g. `["photos/<sessionTs>/<captureTs>.jpg"]`.
 - `users/<sub>/articles/<stem>.empty` — `{status:"empty",reason:"corrupt|silent|no-speech"}`. **Presence = 无语音.**
 - `users/<sub>/articles/<stem>.srt` — subtitle sidecar.
+- `users/<sub>/photos/<sessionTs>/<captureTs>.jpg` — **场景照片**（录音时一边说一边拍，隐藏功能）. `sessionTs` = the recording's `yyyy-MM-dd-HHmmss` (correlates photo↔recording); `captureTs` = same format at capture moment. Square ≤1200px JPEG. Uploaded by the app via the normal `PUT upload/<key>` (lands in user scope). **Inline display:** mine.py feeds them to Claude as vision input and inserts `[[photo:N]]` markers (1-based, in capture order) into the article body at the spot the scene is described; the app/web render the photo inline at each marker. Markers are **stripped** wherever photos can't be shown — WeChat HTML (`md_to_wechat_html`), the cross-user community (`ArticleBody.stripMarkers`), exports, and share excerpts. The editing agent is told to preserve markers verbatim.
 - `users/<sub>/CLAUDE.md` — the user's name + style (Settings tab). Appended to the mining prompt.
 - `users/<sub>/WECHAT.json` — `{appid, secret, enabled, thumb_media_id?, coverMediaIds:{<coverName>:<wechatMediaId>}}` (Settings tab). Drives WeChat draft publishing; `coverMediaIds` caches the per-cover WeChat material ids.
 - `assets/wechat-covers/<style>.png` — **shared** cover image set (10: `style01`–`style10`), global (not per-user). One is picked per article by hash. Public via `/files/api/asset/wechat-covers`.
 - `shares/<id>` — value is a full article key; backs the short public share link. `id = HMAC(key)[:10]`.
 - `community/<shareId>.json` — a public **snapshot** of a shared article set `{shareId,owner,author,title,articles,firstSharedAt,updatedAt}`. `shareId = HMAC('community:'+articleKey)[:12]`. Global (cross-user). Editing the source article does NOT change the snapshot; re-sharing overwrites it.
 - **"processed" = `.json` OR `.empty` exists.** Audio is NEVER auto-deleted; only the user deletes it in-app.
+- `llmlogs/<YYYY-MM-DD>/<epochms>-<rand6>.json` — **every** Anthropic call (mine.py + agent worker) recorded raw `{id,ts,source:mine|agent,user_scope,model,latency_ms,http_status,ok,turn_id,step,request,response|error,meta}`. Admin-only (outside `users/`). 30-day R2 lifecycle (`llmlogs-30d`). Viewer: `voicedrop/admin/llm.html` (reads via admin `GET /files/api/llmlog/{dates,list?date=}` + `download/<key>`). Best-effort write — never blocks mining/editing.
+
 
 ## Files API (`jianshuo.dev/files/api/<path>`, Cloudflare Pages Function)
 
@@ -161,9 +164,15 @@ gear → **设置** (redesign "方案二"; the old `ContentView` 3-tab `TabView`
 - **VD社区** — see the Community section above.
 - **录音 (takeover)** `RecordSession.swift` — full-screen, opens **idle** (tap-to-record). Records to a
   **staging name** `recording-<ts>.m4a`, promoted to the enriched `VoiceDrop-*` name only after finalize
-  → fixes the moov-less/0-byte corrupt-upload race; uploads on finish.
+  → fixes the moov-less/0-byte corrupt-upload race; uploads on finish. **Hidden 拍照 (testing-only):** a
+  transparent 110×120 tap area right of the stop button opens a full-screen camera (`PhotoCapture.swift`,
+  `AVCaptureSession` video-only so recording is NOT interrupted) → square-crops ≤1200px JPEG → uploads to
+  `photos/<sessionTs>/<captureTs>.jpg` (session start ts = recording's ts, so the miner correlates them).
+  White shutter-flash feedback. No visible affordance yet — enable a real button once it proves useful.
 - **文章详情** `RecordingDetailView.swift` — player (shown even in 待处理 / 无语音 states) + the article
-  rendered directly (per-article chip switcher only when >1). ⋯ menu: **发布/更新公众号草稿** ·
+  rendered **with photos混排 inline** (`ArticleBody.segments` splits the body at `[[photo:N]]` markers;
+  `PhotoTile` downloads each via the auth'd Files API and shows a full-width square; unreferenced photos
+  append at the end). Per-article chip switcher only when >1. ⋯ menu: **发布/更新公众号草稿** ·
   **分享/更新 VD社区** · 系统分享 (labels flip once published/shared) · **编辑 = hold-to-talk voice editing**
   (serial queue, mic-as-indicator — see the agent Worker section). Share text = `composeShareText()`: ONE
   string (标题 + 正文开头 cut at a sentence boundary, sized to X's 280 weighted cap minus the 23-weight URL)
@@ -175,6 +184,7 @@ gear → **设置** (redesign "方案二"; the old `ContentView` 3-tab `TabView`
 ## Server miner (`mining/mine.py`)
 
 - Triggered on every new audio upload (files API auto-dispatch). No cron. Idempotent: skips anything with a `.json` or `.empty` marker.
+- **R2 list truncation (fixed 2026-06-24):** R2 `list()` has a hard `limit: 1000`. With >1000 objects in the bucket (audio × 3 files + community/assets/links), the `/list` endpoint silently truncated — newest article JSONs (alphabetically last) were cut off, so mine.py saw them as unprocessed and re-mined every run. Two fixes: (1) `functions/files/api/[[path]].js` `/list` now paginates via cursor loop until `listed.truncated` is false; (2) `mine.py` calls `api_exists()` — a per-key HEAD check using `env.FILES.head(key)`, which is always strongly consistent — before processing, so a lagged or truncated list can never cause a re-mine. HEAD support also added to the `/download` route. Verified: post-fix run showed `list: 167 audio · 0 unprocessed`.
 - Per recording: presign R2 key → Volcano **async file ASR** (empty→`.empty no-speech`) → Claude API (`MINE_MODEL`, default claude-sonnet-4-6) → write `.json`. (No local download/ffprobe — the file API takes a URL.)
 - **JSON is forced**: `_articles_from` strips ``` / ```json fences + stray leading `json`, extracts the outermost `{…}`; if unparseable it **raises (retries next cycle)** — never stores raw model text as a body. (Assistant prefill is NOT used — sonnet-4-6 rejects it with 400.)
 - Reads the owner's `CLAUDE.md` and appends it after the system prompt.

@@ -230,9 +230,10 @@ struct CommunityPostView: View {
                             .padding(.top, 8)
                             if let orig = replyToFull { replyToChip(orig).padding(.top, 10) }
                             if articles.count > 1 { chipRow.padding(.top, 16) }
-                            Text((try? AttributedString(markdown: a.body, options: .init(
+                            let cleanBody = ArticleBody.stripMarkers(a.body)
+                            Text((try? AttributedString(markdown: cleanBody, options: .init(
                                 interpretedSyntax: .inlineOnlyPreservingWhitespace,
-                                failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(a.body))
+                                failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(cleanBody))
                                 .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
                                 .lineSpacing(9).textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)

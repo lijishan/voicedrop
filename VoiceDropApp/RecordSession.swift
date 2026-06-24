@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 /// Full-screen recording takeover (方案二): launched from the red record key on
 /// the 我的录音 list. Starts recording on appear → big stopwatch + live waveform
@@ -14,6 +15,11 @@ struct RecordSession: View {
     @State private var recorder = AudioRecorder()
     @State private var location = LocationTagger()
     @State private var phase: Phase = .starting
+
+    // Photo capture (hidden feature)
+    @State private var sessionStart: Date?
+    @State private var showCamera = false
+    @State private var photoFlash = false
 
     var body: some View {
         ZStack {
@@ -34,43 +40,79 @@ struct RecordSession: View {
             let granted = await AudioRecorder.ensurePermission()
             guard granted else { phase = .denied; return }
             location.start()
-            do { try recorder.start(); phase = .recording }
+            do { try recorder.start(); sessionStart = Date(); phase = .recording }
             catch { phase = .failed("无法开始录音：\(error.localizedDescription)") }
         }
         .onDisappear { _ = recorder.stop() }
+        .fullScreenCover(isPresented: $showCamera) {
+            PhotoCaptureView { date, jpeg in
+                showCamera = false
+                Task { await uploadPhoto(date: date, data: jpeg) }
+                withAnimation(.easeOut(duration: 0.1)) { photoFlash = true }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(200))
+                    withAnimation(.easeIn(duration: 0.25)) { photoFlash = false }
+                }
+            } onCancel: {
+                showCamera = false
+            }
+            .ignoresSafeArea()
+        }
     }
 
     // MARK: Recording (frame ②)
 
     private var recordingScreen: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Circle().fill(Theme.recordRed).frame(width: 9, height: 9)
-                Text("正在录音").font(.system(size: 14)).tracking(2).foregroundStyle(Theme.secondary)
-            }
-            .padding(.top, 64)
-
-            Spacer()
-            VStack(spacing: 34) {
-                Text(timeString(recorder.elapsed))
-                    .font(.system(size: 78, weight: .ultraLight).monospacedDigit())
-                    .foregroundStyle(Theme.ink)
-                    .contentTransition(.numericText())
-                waveform
-            }
-            Spacer()
-
-            VStack(spacing: 7) {
-                Button { Task { await stop() } } label: {
-                    Circle().fill(Theme.card).frame(width: 66, height: 66)
-                        .overlay(Circle().stroke(Color(hex: "E8DECF"), lineWidth: 1))
-                        .overlay(RoundedRectangle(cornerRadius: 6).fill(Theme.recordRed).frame(width: 26, height: 26))
-                        .shadow(color: .black.opacity(0.06), radius: 7, x: 0, y: 4)
+        ZStack {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Circle().fill(Theme.recordRed).frame(width: 9, height: 9)
+                    Text("正在录音").font(.system(size: 14)).tracking(2).foregroundStyle(Theme.secondary)
                 }
-                .buttonStyle(.plain).accessibilityLabel("停止")
-                Text("点击停止").font(.system(size: 12)).tracking(1).foregroundStyle(Theme.secondary)
+                .padding(.top, 64)
+
+                Spacer()
+                VStack(spacing: 34) {
+                    Text(timeString(recorder.elapsed))
+                        .font(.system(size: 78, weight: .ultraLight).monospacedDigit())
+                        .foregroundStyle(Theme.ink)
+                        .contentTransition(.numericText())
+                    waveform
+                }
+                Spacer()
+
+                VStack(spacing: 7) {
+                    Button { Task { await stop() } } label: {
+                        Circle().fill(Theme.card).frame(width: 66, height: 66)
+                            .overlay(Circle().stroke(Color(hex: "E8DECF"), lineWidth: 1))
+                            .overlay(RoundedRectangle(cornerRadius: 6).fill(Theme.recordRed).frame(width: 26, height: 26))
+                            .shadow(color: .black.opacity(0.06), radius: 7, x: 0, y: 4)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("停止")
+                    Text("点击停止").font(.system(size: 12)).tracking(1).foregroundStyle(Theme.secondary)
+                }
+                .padding(.bottom, 26)
             }
-            .padding(.bottom, 26)
+
+            // Hidden photo trigger: tap the right-side empty area next to the stop button.
+            // Uses AVCaptureSession (video-only) so recording is not interrupted.
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Color.clear
+                        .frame(width: 110, height: 120)
+                        .contentShape(Rectangle())
+                        .onTapGesture { Task { await openCamera() } }
+                        .padding(.trailing, 16)
+                        .padding(.bottom, 10)
+                }
+            }
+
+            // Shutter flash feedback
+            if photoFlash {
+                Color.white.opacity(0.55).ignoresSafeArea().allowsHitTesting(false)
+            }
         }
     }
 
@@ -137,6 +179,33 @@ struct RecordSession: View {
             let toArchive = url
             await Task.detached { ICloudArchive.save(toArchive) }.value
         }
+    }
+
+    // MARK: Photo capture (hidden)
+
+    private func openCamera() async {
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        if status == .notDetermined {
+            _ = await AVCaptureDevice.requestAccess(for: .video)
+        }
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return }
+        showCamera = true
+    }
+
+    /// Upload a captured photo to R2 at photos/<sessionStartTs>/<captureTs>.jpg.
+    /// Uses the session start timestamp as the folder so the miner can correlate
+    /// photos with the correct recording later.
+    private func uploadPhoto(date: Date, data: Data) async {
+        guard let start = sessionStart else { return }
+        let folder = RecordingName.timestamp(start)
+        let file = RecordingName.timestamp(date)
+        let key = "photos/\(folder)/\(file).jpg"
+        let base = URL(string: "https://jianshuo.dev/files/api")!
+        var req = URLRequest(url: base.appending(path: "upload").appending(path: key))
+        req.httpMethod = "PUT"
+        req.setValue("Bearer \(AuthStore.shared.bearer)", forHTTPHeaderField: "Authorization")
+        req.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        _ = try? await URLSession.shared.upload(for: req, from: data)
     }
 
     private func openSettings() {

@@ -189,18 +189,47 @@ struct RecordingDetailView: View {
 
                     if articles.count > 1 { chipRow.padding(.top, 16) }
 
-                    Text(bodyAttributed(a))
-                        .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
-                        .lineSpacing(9)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, articles.count > 1 ? 16 : 20)
+                    articleBody(a).padding(.top, articles.count > 1 ? 16 : 20)
                 }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 8)
         }
         .contentMargins(.bottom, 96, for: .scrollContent)   // clear the floating pill
+    }
+
+    /// Render the body with photos混排 inline at their `[[photo:N]]` markers.
+    /// Any photos the model didn't place are appended at the end so nothing is lost.
+    @ViewBuilder
+    private func articleBody(_ a: MinedArticle) -> some View {
+        let photos = doc?.photos ?? []
+        let segments = ArticleBody.segments(a.body)
+        let placed = Set(segments.compactMap { if case .photo(let n) = $0 { return n } else { return nil } })
+        let trailing = photos.indices.filter { !placed.contains($0 + 1) }
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(segments) { seg in
+                switch seg {
+                case .text(let t):
+                    Text(textAttributed(t))
+                        .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
+                        .lineSpacing(9).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .photo(let n):
+                    if let key = photos[safe: n - 1] {
+                        PhotoTile(store: store, relKey: key)
+                    }
+                }
+            }
+            ForEach(trailing, id: \.self) { i in
+                PhotoTile(store: store, relKey: photos[i])
+            }
+        }
+    }
+
+    private func textAttributed(_ s: String) -> AttributedString {
+        (try? AttributedString(markdown: s, options: .init(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace,
+            failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(s)
     }
 
     private var chipRow: some View {
@@ -221,12 +250,6 @@ struct RecordingDetailView: View {
                 }
             }
         }
-    }
-
-    private func bodyAttributed(_ a: MinedArticle) -> AttributedString {
-        (try? AttributedString(markdown: a.body, options: .init(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace,
-            failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(a.body)
     }
 
     // MARK: Player card
@@ -530,6 +553,37 @@ struct DownTriangle: Shape {
 
 /// A ready-to-share payload (article excerpt + short link), one String.
 struct SharePayload: Identifiable { let text: String; var id: String { text } }
+
+/// Full-width square photo taken during a recording session, rendered inline in
+/// the article at its `[[photo:N]]` marker. Downloads via the authenticated
+/// Files API using the stored bearer token.
+struct PhotoTile: View {
+    let store: LibraryStore
+    let relKey: String   // relative key, e.g. "photos/<ts>/<ts>.jpg"
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .fill(Theme.card)
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .overlay {
+                if let img = image {
+                    Image(uiImage: img)
+                        .resizable().scaledToFill()
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                } else {
+                    ProgressView().tint(Theme.accent)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .task {
+                guard let data = try? await store.downloadData(relKey) else { return }
+                image = UIImage(data: data)
+            }
+    }
+}
 
 /// The system share sheet (UIActivityViewController) for SwiftUI.
 struct ShareSheet: UIViewControllerRepresentable {

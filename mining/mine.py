@@ -21,7 +21,7 @@ Env:
   MINE_MODEL             optional, default claude-sonnet-4-6
   MINE_DRY               if set, list what WOULD be mined and exit (no ASR/LLM)
 """
-import os, re, sys, json, time, struct, zlib, subprocess, tempfile, urllib.request, hashlib
+import os, re, sys, json, time, struct, zlib, subprocess, tempfile, urllib.request, hashlib, base64
 from urllib.parse import quote
 
 
@@ -45,6 +45,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # WeChat account (66.42.45.128). GitHub Actions IPs are not in the whitelist
 # and get errcode 40164 without this. Set WECHAT_PROXY in repo secrets.
 WECHAT_PROXY = os.environ.get("WECHAT_PROXY", "")
+
+# Added to the system prompt when the session has photos. Appended BEFORE
+# CLAUDE.md so user's style card overrides tone but not the visual instruction.
+_PHOTO_INSTR = """
+另外附上了几张照片，每张标了编号和拍摄时刻。照片是作者一边说一边拍的，拍摄时刻能帮你判断这张照片对应口述里的哪一段。要求：
+- 把照片的场景自然融进叙述，就像亲眼看到一样直接写进去，不要机械地写「照片里是…」。
+- 在正文里、口述提到这个场景的那个位置，单独起一行插入照片标记 `[[photo:N]]`（N 是照片编号）。标记必须独占一行，前后空行。
+- 每张照片在全文里只插入一次，按拍摄时刻对应到合适的段落附近。
+- 如果某张照片实在和口述对不上，就放在最相关的那段后面。"""
 
 # Balanced split: 1+ standalone articles, one per *clearly distinct* topic,
 # leaning to fewer/meatier pieces — not one-per-paragraph. Each article obeys
@@ -257,6 +266,45 @@ def _user_prefix(key):
     return parts[0] + "/" if len(parts) == 2 else ""
 
 
+def _session_ts(audio_key):
+    """Extract 'yyyy-MM-dd-HHmmss' from a VoiceDrop-... filename.
+    VoiceDrop-2026-06-24-131500-2m33s-... → '2026-06-24-131500'."""
+    leaf = os.path.basename(audio_key)
+    if leaf.endswith(".m4a"): leaf = leaf[:-4]
+    parts = leaf.split("-")
+    if len(parts) >= 5 and parts[0] == "VoiceDrop":
+        return "-".join(parts[1:5])
+    return None
+
+
+def find_session_photos(audio_key, all_names):
+    """Return sorted list of full R2 photo keys for this audio session.
+    Photos live at users/<sub>/photos/<sessionTs>/<captureTs>.jpg and are
+    uploaded by the iOS app while the user is speaking."""
+    prefix = _user_prefix(audio_key)
+    ts = _session_ts(audio_key)
+    if not ts:
+        return []
+    folder = f"{prefix}photos/{ts}/"
+    return sorted(n for n in all_names if n.startswith(folder) and n.lower().endswith(".jpg"))
+
+
+def load_photo_b64(photo_key):
+    """Download a photo from R2 and return (base64_jpeg, human_time_label).
+    The label is derived from the capture timestamp in the filename."""
+    raw = _req("GET", f"{BASE}/download/{quote(photo_key)}",
+               headers={"Authorization": f"Bearer {TOKEN}"})
+    b64 = base64.standard_b64encode(raw).decode("ascii")
+    capture = os.path.basename(photo_key)[:-4]   # e.g. "2026-06-24-131523"
+    parts = capture.split("-")
+    if len(parts) >= 4 and len(parts[3]) == 6:
+        t = parts[3]
+        label = f"{t[:2]}:{t[2:4]}:{t[4:]}"
+    else:
+        label = capture
+    return b64, label
+
+
 def fetch_wechat_config(key, require_enabled=True):
     """Returns the user's WECHAT.json dict, or None if absent / incomplete (or,
     when require_enabled, if the 自动推草稿 toggle is off). On-demand publishing
@@ -298,7 +346,11 @@ def _inline_md(text):
 
 
 def md_to_wechat_html(md):
-    """Convert markdown to basic WeChat-compatible HTML with inline styles."""
+    """Convert markdown to basic WeChat-compatible HTML with inline styles.
+    [[photo:N]] markers (in-app inline photos) are stripped — WeChat drafts
+    don't carry the session photos, so the markers must not leak as text."""
+    md = re.sub(r'\[\[photo:\d+\]\]', '', md)
+    md = re.sub(r'\n{3,}', '\n\n', md)
     lines = md.split('\n')
     parts = []
     list_tag = None  # 'ul' or 'ol'
@@ -649,11 +701,41 @@ def _articles_from(text):
     ]  # empty list = parsed OK, LLM decided no article possible
 
 
-def generate_articles(transcript, claude_md="", force=False, meta=None):
+def _sanitize_for_log(payload):
+    """Copy of the API payload with base64 image bytes replaced by a short
+    placeholder, so llmlogs don't store hundreds of KB of image data per call."""
+    msgs = payload.get("messages")
+    if not msgs:
+        return payload
+    out = dict(payload)
+    new_msgs = []
+    for m in msgs:
+        content = m.get("content")
+        if isinstance(content, list):
+            blocks = []
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "image":
+                    src = b.get("source", {})
+                    n = len(src.get("data", "")) if isinstance(src, dict) else 0
+                    blocks.append({"type": "image", "source": {"type": "base64",
+                                   "media_type": src.get("media_type", "image/jpeg"),
+                                   "data": f"<{n} b64 chars omitted>"}})
+                else:
+                    blocks.append(b)
+            new_msgs.append({**m, "content": blocks})
+        else:
+            new_msgs.append(m)
+    out["messages"] = new_msgs
+    return out
+
+
+def generate_articles(transcript, claude_md="", force=False, meta=None, photos=None):
     """Return a list of {title, body}. Balanced split: usually 1, more only on
     clearly distinct topics. Falls back to a single article on parse failure.
     The owner's CLAUDE.md (name + style), if any, is appended after the system
     prompt so the articles come out in their own voice.
+    photos: optional list of (base64_str, time_label) tuples; if provided the
+    API call becomes multimodal (vision) so Claude can describe the scenes.
     force=True uses a minimal system prompt (no style rules) as a last resort."""
     # Structured outputs (output_config.format) constrain the reply to schema-valid
     # JSON, so a big prose-heavy CLAUDE.md can't drift the model off clean JSON.
@@ -662,15 +744,30 @@ def generate_articles(transcript, claude_md="", force=False, meta=None):
         system = SYSTEM_FORCE
     elif claude_md:
         # _FORCE_SUFFIX ensures the style card doesn't veto article creation.
-        system = f"{SYSTEM}\n\n---\n\n{claude_md}{_FORCE_SUFFIX}"
+        system = f"{SYSTEM}{_PHOTO_INSTR if photos else ''}\n\n---\n\n{claude_md}{_FORCE_SUFFIX}"
     else:
-        system = SYSTEM
+        system = SYSTEM + (_PHOTO_INSTR if photos else "")
     max_tokens = 2000 if force else 8000
+
+    # Build user message: text transcript + optional image blocks
+    if photos and not force:
+        user_content = [{"type": "text", "text": f"口述转写：\n\n{transcript}"}]
+        for i, (b64, label) in enumerate(photos, 1):
+            user_content.append({"type": "text", "text": f"\n[照片 {i}，拍摄于 {label}]"})
+            user_content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}
+            })
+        user_msg = user_content
+    else:
+        user_msg = f"口述转写：\n\n{transcript}"
+
     payload = {
         "model": MODEL, "max_tokens": max_tokens, "system": system,
-        "messages": [{"role": "user", "content": f"口述转写：\n\n{transcript}"}],
+        "messages": [{"role": "user", "content": user_msg}],
         "output_config": {"format": {"type": "json_schema", "schema": ARTICLES_SCHEMA}},
     }
+    log_payload = _sanitize_for_log(payload)   # drop base64 image bytes
     arts = None
     turn_id = f"{int(time.time() * 1000)}-{os.urandom(3).hex()}"
     for attempt in range(2):  # one retry: a single malformed reply self-heals
@@ -681,7 +778,7 @@ def generate_articles(transcript, claude_md="", force=False, meta=None):
                        headers={"x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01",
                                 "content-type": "application/json"})
             resp = json.loads(raw)
-            llmlog(payload, response=resp, ok=True, status=200, latency=time.time() - t0,
+            llmlog(log_payload, response=resp, ok=True, status=200, latency=time.time() - t0,
                    step=attempt, turn_id=turn_id, meta=meta)
         except Exception as e:
             errtext = str(e)
@@ -689,7 +786,7 @@ def generate_articles(transcript, claude_md="", force=False, meta=None):
                 errtext = e.read().decode("utf-8", "replace")[:2000]
             except Exception:
                 pass
-            llmlog(payload, error=errtext, ok=False, status=getattr(e, "code", 0),
+            llmlog(log_payload, error=errtext, ok=False, status=getattr(e, "code", 0),
                    latency=time.time() - t0, step=attempt, turn_id=turn_id, meta=meta)
             raise
         text = "".join(b.get("text", "") for b in resp.get("content", [])
@@ -731,6 +828,8 @@ def main():
         leaf = os.path.basename(audio)
         rec_t0 = time.time()
         log(f"── {leaf}  ({i}/{len(todo)})")
+        # Find photos taken during this recording session.
+        photo_keys = find_session_photos(audio, names)   # full R2 keys
         # Guard against R2 list lag: a concurrent run may have written the article
         # JSON just before our list call. Verify with a direct HEAD (strongly consistent).
         if api_exists(article_key_for(audio)) or api_exists(empty_key_for(audio)):
@@ -762,10 +861,23 @@ def main():
             claude_md = fetch_claude_md(audio)
             if claude_md:
                 log(f"   + CLAUDE.md ({len(claude_md)} chars)")
+
+            # Load photos (if any) for this session.
+            photos = []
+            if photo_keys:
+                log(f"   + {len(photo_keys)} photo(s), loading…")
+                for pk in photo_keys:
+                    try:
+                        b64, label = load_photo_b64(pk)
+                        photos.append((b64, label))
+                    except Exception as pe:
+                        log(f"   ⚠ photo load failed ({pk}): {pe}")
+
             meta = {"user_scope": _user_prefix(audio), "stem": leaf[:-4]}
             t = time.time()
             try:
-                articles = generate_articles(transcript, claude_md, meta=meta)
+                articles = generate_articles(transcript, claude_md, meta=meta,
+                                             photos=photos or None)
             except NoArticleError:
                 tot_llm += time.time() - t
                 # Style-laden pass returned empty — retry with force mode
@@ -790,6 +902,10 @@ def main():
                 log(f"   Claude mine → {len(articles)} article(s) ({llm:.1f}s)")
 
             json_key, srt_key = _stem_keys(audio)
+            # Store photos as relative keys (strip user scope prefix) so the iOS
+            # app can download them through the Files API using the user token.
+            prefix = _user_prefix(audio)
+            relative_photos = [k[len(prefix):] for k in photo_keys]
             art = {
                 "schema": 2,
                 "id": leaf[:-4],
@@ -801,6 +917,8 @@ def main():
                 "status": "ready",
                 "model": MODEL,
             }
+            if relative_photos:
+                art["photos"] = relative_photos
             t = time.time()
             api_article_write(json_key, art)
             if srt:

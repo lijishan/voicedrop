@@ -154,7 +154,7 @@ private func indexHTMLData(recordings: [(rec: Recording, doc: ArticleDoc?)]) -> 
     for (rec, doc) in recordings {
         let title   = doc?.resolvedArticles.first?.title ?? rec.displayTitle
         let preview = doc?.resolvedArticles.first.map { a -> String in
-            let t = a.body.replacingOccurrences(of: "\n", with: " ")
+            let t = ArticleBody.stripMarkers(a.body).replacingOccurrences(of: "\n", with: " ")
             return t.count > 120 ? String(t.prefix(120)) + "…" : t
         } ?? ""
         let dur     = rec.durationLabel.map { " · \($0)" } ?? ""
@@ -238,7 +238,7 @@ private func recordingHTMLData(rec: Recording, doc: ArticleDoc) -> Data {
 
     var sections = ""
     for (i, a) in articles.enumerated() {
-        let ps = a.body
+        let ps = ArticleBody.stripMarkers(a.body)
             .components(separatedBy: "\n\n")
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .map { "<p>\(h($0.replacingOccurrences(of: "\n", with: " ")))</p>" }

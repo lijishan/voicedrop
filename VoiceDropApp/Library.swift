@@ -21,6 +21,9 @@ struct ArticleDoc: Decodable {
     let transcript: String?
     let srt: String?
     let articles: [MinedArticle]?
+    /// Relative R2 keys for photos taken during this recording session.
+    /// e.g. ["photos/2026-06-24-131500/2026-06-24-131523.jpg"]
+    let photos: [String]?
     // v1 fallback fields
     let title: String?
     let body: String?
@@ -33,6 +36,57 @@ struct ArticleDoc: Decodable {
 
     /// True once any article has a WeChat draft (the menu shows 更新 instead of 发布).
     var hasWechatDraft: Bool { (articles ?? []).contains { $0.wechatMediaId != nil } }
+}
+
+/// A piece of an article body: a run of markdown text, or an inline photo
+/// (1-based index into the doc's `photos` array), parsed from `[[photo:N]]`
+/// markers the miner inserts at the spot the scene is described.
+enum ArticleSegment: Identifiable {
+    case text(String)
+    case photo(Int)
+    var id: String {
+        switch self {
+        case .text(let s): return "t:\(s.count):\(s.prefix(12))"
+        case .photo(let n): return "p:\(n)"
+        }
+    }
+}
+
+enum ArticleBody {
+    private static let marker = try! NSRegularExpression(pattern: #"\[\[photo:(\d+)\]\]"#)
+
+    /// Split a body into text + photo segments at `[[photo:N]]` markers.
+    static func segments(_ body: String) -> [ArticleSegment] {
+        let ns = body as NSString
+        let matches = marker.matches(in: body, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return [.text(body)] }
+        var out: [ArticleSegment] = []
+        var cursor = 0
+        for m in matches {
+            if m.range.location > cursor {
+                let text = ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor))
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { out.append(.text(trimmed)) }
+            }
+            if let n = Int(ns.substring(with: m.range(at: 1))) { out.append(.photo(n)) }
+            cursor = m.range.location + m.range.length
+        }
+        if cursor < ns.length {
+            let text = ns.substring(from: cursor).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { out.append(.text(text)) }
+        }
+        return out
+    }
+
+    /// Body with all `[[photo:N]]` markers removed — for places that can't render
+    /// the session photos (WeChat, the cross-user community, share excerpts).
+    static func stripMarkers(_ body: String) -> String {
+        let ns = body as NSString
+        let stripped = marker.stringByReplacingMatches(
+            in: body, range: NSRange(location: 0, length: ns.length), withTemplate: "")
+        return stripped.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 /// A recording as seen in the user's R2 space: the audio key plus whether the
