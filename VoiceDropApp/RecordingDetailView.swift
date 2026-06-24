@@ -142,7 +142,10 @@ struct RecordingDetailView: View {
     }
 
     private func share() async {
-        if let u = await store.shareURL(recording) { sharePayload = SharePayload(text: u.absoluteString) }
+        // Carry the on-screen selection (articleIndex) into the link so the public
+        // page previews and renders the section the user is actually looking at —
+        // not always the first one.
+        if let u = await store.shareURL(recording, section: articleIndex) { sharePayload = SharePayload(text: u.absoluteString) }
         else { showToast("生成分享链接失败") }
     }
 

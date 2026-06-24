@@ -19,7 +19,6 @@ struct RecordSession: View {
     // Photo capture (hidden feature)
     @State private var sessionStart: Date?
     @State private var showCamera = false
-    @State private var photoFlash = false
 
     var body: some View {
         ZStack {
@@ -48,16 +47,16 @@ struct RecordSession: View {
         }
         .onDisappear { _ = recorder.stop() }
         .fullScreenCover(isPresented: $showCamera) {
-            PhotoCaptureView { date, jpeg in
+            // The camera stays open for continuous shooting; shots collect in a
+            // filmstrip (deletable) and are all uploaded when the user taps 完成.
+            // Read sessionStart once here (on main) so the upload closure captures
+            // a plain Date?, not the actor-isolated view property.
+            let scope = sessionStart
+            PhotoCaptureView(recordingStart: scope) { captured in
                 showCamera = false
-                Task { await uploadPhoto(date: date, data: jpeg) }
-                withAnimation(.easeOut(duration: 0.1)) { photoFlash = true }
-                Task {
-                    try? await Task.sleep(for: .milliseconds(200))
-                    withAnimation(.easeIn(duration: 0.25)) { photoFlash = false }
+                for photo in captured {
+                    Task { await Self.uploadPhoto(date: photo.date, data: photo.data, sessionStart: scope) }
                 }
-            } onCancel: {
-                showCamera = false
             }
             .ignoresSafeArea()
         }
@@ -110,11 +109,6 @@ struct RecordSession: View {
                         .padding(.trailing, 16)
                         .padding(.bottom, 10)
                 }
-            }
-
-            // Shutter flash feedback
-            if photoFlash {
-                Color.white.opacity(0.55).ignoresSafeArea().allowsHitTesting(false)
             }
         }
     }
@@ -195,10 +189,13 @@ struct RecordSession: View {
         showCamera = true
     }
 
-    /// Upload a captured photo to R2 at photos/<sessionStartTs>/<captureTs>.jpg.
-    /// Uses the session start timestamp as the folder so the miner can correlate
-    /// photos with the correct recording later.
-    private func uploadPhoto(date: Date, data: Data) async {
+    /// Upload a captured/picked photo to R2 at photos/<sessionStartTs>/<captureTs>.jpg.
+    /// The folder is the recording's start timestamp (same source as the audio
+    /// filename) so the miner correlates photos with the right recording. Static +
+    /// @MainActor: called from the camera VC's @Sendable callback, capturing only
+    /// the Sendable sessionStart (not the non-Sendable RecordSession view).
+    @MainActor
+    private static func uploadPhoto(date: Date, data: Data, sessionStart: Date?) async {
         guard let start = sessionStart else { return }
         let folder = RecordingName.timestamp(start)
         let file = RecordingName.timestamp(date)

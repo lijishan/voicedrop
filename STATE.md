@@ -67,7 +67,10 @@ Keychain) OR a Sign-in-with-Apple session JWT. Server admin token = `FILES_TOKEN
 - `GET asset/wechat-covers` (list) / `GET asset/wechat-covers/<name>` (image bytes) — **public, no auth**; the cover set in the FILES bucket, read by the relay + miner to pick a per-article cover.
 
 `functions/voicedrop/[token].js` — public, unauth. Resolves `shares/<id>` → renders
-that one article as a light-theme HTML page. Non-token segment (e.g. `privacy`) →
+that one article as a light-theme HTML page. **`?s=<index>`** (optional) renders/previews
+only that one section of a multi-section doc — the app appends it (`shareURL(_:section:)`
+from `articleIndex`) so a shared link reflects the section the user had selected; absent or
+out-of-range falls back to the full set (old links unchanged). Non-token segment (e.g. `privacy`) →
 `context.next()` (static `/voicedrop/` landing + `/voicedrop/privacy/` untouched).
 Article pages emit **OG + Twitter Card** tags (`og:title`=article title,
 `og:description`=excerpt, `twitter:card=summary_large_image`, `og:image`=static
@@ -166,9 +169,21 @@ gear → **设置** (redesign "方案二"; the old `ContentView` 3-tab `TabView`
   **staging name** `recording-<ts>.m4a`, promoted to the enriched `VoiceDrop-*` name only after finalize
   → fixes the moov-less/0-byte corrupt-upload race; uploads on finish. **Hidden 拍照 (testing-only):** a
   transparent 110×120 tap area right of the stop button opens a full-screen camera (`PhotoCapture.swift`,
-  `AVCaptureSession` video-only so recording is NOT interrupted) → square-crops ≤1200px JPEG → uploads to
-  `photos/<sessionTs>/<captureTs>.jpg` (session start ts = recording's ts, so the miner correlates them).
-  White shutter-flash feedback. No visible affordance yet — enable a real button once it proves useful.
+  `AVCaptureSession` video-only so recording is NOT interrupted). Design = "Photo Capture.dc.html". **Square
+  viewfinder** (rule-of-thirds grid + border + empty-state hint), top bar = live "● 录音中 · MM:SS" (or
+  "已拍 N 张" pill once shots exist) + a **完成** button (gray→orange) that closes and uploads. Bottom bar =
+  photo-library import (left, `PHPickerViewController`, multi-select≤9, no permission prompt), shutter
+  (center), front/back **flip** (right). **Continuous capture:** camera stays open; each shot lands in a
+  **filmstrip** of thumbnails, each deletable via a ✕ — shots are held locally and **all uploaded on 完成**
+  (so delete is a pure local removal, no R2 orphan race). Every shot/import is center-cropped to a 1:1
+  square (≤1080px JPEG, auto-quality to <900KB, WYSIWYG with the square preview; `SquareImage.jpeg` is a
+  nonisolated top-level helper so off-main capture/PHPicker callbacks don't trip a main-actor assertion)
+  and uploaded to `photos/<sessionTs>/<captureTs>.jpg`. Flip re-applies portrait+mirroring on the photo
+  connection **at capture time** (`configurePhotoConnection()` in `takePhoto`) — the connection is recreated
+  when the input swaps, so a one-shot post-flip apply races it; front stills are mirrored to match the selfie
+  preview. **`sessionTs` = the recorder's own start instant** (`AudioRecorder.startDate`, same source as the
+  audio filename — NOT a separate `Date()`, which drifted across a second boundary and broke audio↔photo
+  correlation). No visible affordance on the record screen yet — enable a real button once it proves useful.
 - **文章详情** `RecordingDetailView.swift` — player (shown even in 待处理 / 无语音 states) + the article
   rendered **with photos混排 inline** (`ArticleBody.segments` splits the body at `[[photo:N]]` markers;
   `PhotoTile` downloads each via the auth'd Files API and shows a full-width square; unreferenced photos

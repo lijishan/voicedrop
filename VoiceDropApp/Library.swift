@@ -332,8 +332,11 @@ final class LibraryStore {
 
     /// Mint a public share link for this recording's article(s). The server signs
     /// the article key and returns a `jianshuo.dev/voicedrop/<token>` URL anyone
-    /// can open. Returns nil if not mined yet or the request fails.
-    func shareURL(_ rec: Recording) async -> URL? {
+    /// can open. `section` is the index of the currently-selected article; it's
+    /// appended as `?s=<section>` so the public page leads with (and previews) that
+    /// section instead of always the first. Returns nil if not mined yet or the
+    /// request fails.
+    func shareURL(_ rec: Recording, section: Int = 0) async -> URL? {
         guard !token.isEmpty, rec.hasArticles else { return nil }
         struct Resp: Decodable { let url: String }
         var req = URLRequest(url: base.appending(path: "share").appending(path: rec.articleKey))
@@ -341,7 +344,10 @@ final class LibraryStore {
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
-            return URL(string: try JSONDecoder().decode(Resp.self, from: data).url)
+            let urlStr = try JSONDecoder().decode(Resp.self, from: data).url
+            guard var comps = URLComponents(string: urlStr) else { return URL(string: urlStr) }
+            comps.queryItems = [URLQueryItem(name: "s", value: String(section))]
+            return comps.url ?? URL(string: urlStr)
         } catch { return nil }
     }
 
