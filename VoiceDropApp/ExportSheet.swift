@@ -15,7 +15,7 @@ struct ExportSheet: View {
             contentView
                 .padding(.horizontal, 24).padding(.bottom, 32)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.appBG)
         .presentationDetents([.height(sheetHeight)])
         .presentationDragIndicator(.hidden)

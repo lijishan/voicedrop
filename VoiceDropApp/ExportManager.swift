@@ -25,12 +25,14 @@ final class ExportManager {
         let total = recordings.count
 
         let tmpID = UUID().uuidString
-        let srcDir = FileManager.default.temporaryDirectory.appendingPathComponent("vd-src-\(tmpID)")
-        let audioDir = srcDir.appendingPathComponent("audio")
-        let readDir  = srcDir.appendingPathComponent("recordings")
+        let srcDir     = FileManager.default.temporaryDirectory.appendingPathComponent("vd-src-\(tmpID)")
+        let audioDir   = srcDir.appendingPathComponent("audio")
+        let readDir    = srcDir.appendingPathComponent("recordings")
+        let photosDir  = srcDir.appendingPathComponent("photos")
         do {
-            try FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: readDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: audioDir,  withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: readDir,   withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: photosDir, withIntermediateDirectories: true)
         } catch { phase = .failed("创建临时目录失败"); return }
 
         var docsMap: [(rec: Recording, doc: ArticleDoc?)] = []
@@ -46,7 +48,18 @@ final class ExportManager {
             if rec.hasArticles {
                 doc = await store.fetchDoc(rec)
                 if let d = doc {
-                    try? recordingHTMLData(rec: rec, doc: d)
+                    // Download photos first so the HTML can reference them
+                    var downloadedPhotoPaths: [String] = []
+                    for key in d.photos ?? [] {
+                        if let data = try? await store.downloadData(key) {
+                            // key = "photos/<sessionTs>/<captureTs>.jpg" — preserve sub-path
+                            let dest = srcDir.appendingPathComponent(key)
+                            try? FileManager.default.createDirectory(
+                                at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                            if (try? data.write(to: dest)) != nil { downloadedPhotoPaths.append(key) }
+                        }
+                    }
+                    try? recordingHTMLData(rec: rec, doc: d, downloadedPhotos: downloadedPhotoPaths)
                         .write(to: readDir.appendingPathComponent("\(rec.stem).html"))
                 }
                 if let srt = try? await store.downloadData(rec.srtKey) {
@@ -231,19 +244,37 @@ private func indexHTMLData(recordings: [(rec: Recording, doc: ArticleDoc?)]) -> 
     return Data(html.utf8)
 }
 
-private func recordingHTMLData(rec: Recording, doc: ArticleDoc) -> Data {
+private func recordingHTMLData(rec: Recording, doc: ArticleDoc, downloadedPhotos: [String] = []) -> Data {
     let articles = doc.resolvedArticles
     let title    = articles.first?.title ?? rec.displayTitle
     let dur      = rec.durationLabel.map { " · \($0)" } ?? ""
 
+    // Build a set for fast lookup of successfully downloaded keys
+    let downloaded = Set(downloadedPhotos)
+
     var sections = ""
     for (i, a) in articles.enumerated() {
-        let ps = ArticleBody.stripMarkers(a.body)
-            .components(separatedBy: "\n\n")
-            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            .map { "<p>\(h($0.replacingOccurrences(of: "\n", with: " ")))</p>" }
-            .joined(separator: "\n")
-        sections += (i > 0 ? "<hr>\n" : "") + "<h1>\(h(a.title))</h1>\n<div class=\"body\">\(ps)</div>\n"
+        var bodyHTML = ""
+        for seg in ArticleBody.segments(a.body) {
+            switch seg {
+            case .text(let t):
+                let paras = t.components(separatedBy: "\n\n")
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                for p in paras {
+                    bodyHTML += "<p>\(h(p.replacingOccurrences(of: "\n", with: " ")))</p>\n"
+                }
+            case .photo(let n):
+                let photos = doc.photos ?? []
+                if n >= 1, n <= photos.count {
+                    let key = photos[n - 1]   // e.g. "photos/<sessionTs>/<captureTs>.jpg"
+                    if downloaded.contains(key) {
+                        // article is in recordings/, photos are at root level
+                        bodyHTML += "<img class=\"photo\" src=\"../\(key)\" loading=\"lazy\">\n"
+                    }
+                }
+            }
+        }
+        sections += (i > 0 ? "<hr>\n" : "") + "<h1>\(h(a.title))</h1>\n<div class=\"body\">\(bodyHTML)</div>\n"
     }
 
     let transcript = doc.transcript.map {
@@ -272,6 +303,7 @@ private func recordingHTMLData(rec: Recording, doc: ArticleDoc) -> Data {
     .xc summary::before{content:"▶  "}
     details[open].xc summary::before{content:"▼  "}
     .xcp{font-size:14px;color:#9A9387;line-height:1.8;white-space:pre-wrap}
+    .photo{width:100%;border-radius:10px;margin-bottom:18px;display:block}
     </style></head>
     <body>
     <div class="nav"><a class="back" href="../index.html">← 所有录音</a></div>
