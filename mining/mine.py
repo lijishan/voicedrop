@@ -1063,8 +1063,8 @@ def main():
             # Falls back to the server default (MINE_MODEL env) if not set.
             user_model = fetch_user_model(audio)
             user_prov = _provider_for_model(user_model) if user_model else PROVIDER
-            log(f"   + model: {user_prov.name}/{user_prov.model}" +
-                ("" if user_model else " (server default)"))
+            if user_model:
+                log(f"   + model: {user_prov.name}/{user_prov.model}")
 
             # Load photos (if any) for this session.
             photos = []
