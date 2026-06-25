@@ -281,10 +281,19 @@ final class LibraryStore {
     }
 
     /// Fetch the mined article document for a recording (nil if not mined yet).
+    /// Uses the articles API (not raw download) so schema-3 docs get their current
+    /// head version's articles reconstructed at the top level.
     func fetchDoc(_ rec: Recording) async -> ArticleDoc? {
-        guard rec.hasArticles else { return nil }
-        do { return try JSONDecoder().decode(ArticleDoc.self, from: await get(rec.articleKey)) }
-        catch { return nil }
+        guard rec.hasArticles, !token.isEmpty else { return nil }
+        let enc = rec.stem.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? rec.stem
+        guard let url = URL(string: "\(base.absoluteString)/articles/\(enc)") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            return try JSONDecoder().decode(ArticleDoc.self, from: data)
+        } catch { return nil }
     }
 
     /// Fetch the human-readable reason from a `.empty` marker (silent / corrupt /
