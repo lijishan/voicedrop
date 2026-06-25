@@ -50,10 +50,6 @@ struct RecordingDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             navBar
-            if !articles.isEmpty {
-                editingToolbar
-                    .animation(.easeInOut(duration: 0.2), value: dictation.isRecording || agent.state == .working)
-            }
             if loadingDoc {
                 Spacer(); ProgressView().tint(Theme.accent); Spacer()
             } else if recording.isEmpty {
@@ -119,40 +115,84 @@ struct RecordingDetailView: View {
         await dictation.requestAuth()
     }
 
-    // MARK: Editing toolbar
+    // MARK: Player / Edit header (固定在 ScrollView 外，切换时高度不变)
 
-    @ViewBuilder private var editingToolbar: some View {
+    @ViewBuilder private var playerEditHeader: some View {
         let isEditing = dictation.isRecording || agent.state == .working
+        let r: CGFloat = 10
+        let btnShadow = Color.black.opacity(0.06)
         if isEditing {
-            HStack(spacing: 16) {
+            HStack(spacing: 10) {
+                // 紧凑播放键 + 当前时间
+                Button {
+                    if player.duration == 0 { Task { await loadAndPlay() } } else { player.toggle() }
+                } label: {
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 9)
+                            .fill(Theme.accent)
+                            .frame(width: 34, height: 34)
+                            .overlay(
+                                Image(systemName: loadingAudio ? "arrow.down" : (player.isPlaying ? "pause.fill" : "play.fill"))
+                                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                                    .symbolEffect(.pulse, isActive: loadingAudio)
+                            )
+                        Text(currentTime)
+                            .font(.system(size: 12.5).monospacedDigit())
+                            .foregroundStyle(Theme.metaRead)
+                            .fixedSize()
+                    }
+                    .padding(.vertical, 7).padding(.leading, 8).padding(.trailing, 12)
+                    .background(Theme.card, in: RoundedRectangle(cornerRadius: r))
+                    .overlay(RoundedRectangle(cornerRadius: r).stroke(Theme.borderRead, lineWidth: 1))
+                    .shadow(color: btnShadow, radius: 8, x: 0, y: 2)
+                }
+                .buttonStyle(.plain).disabled(loadingAudio)
+
+                Spacer()
+
+                // 插入照片
                 Button { showingInsertPhoto = true } label: {
-                    VStack(spacing: 3) {
-                        Image(systemName: "photo.badge.plus").font(.system(size: 18))
-                        Text("插图").font(.system(size: 11))
-                    }
-                    .foregroundStyle(Theme.ink)
+                    RoundedRectangle(cornerRadius: r)
+                        .fill(Theme.card)
+                        .frame(width: 42, height: 42)
+                        .overlay(
+                            Image(systemName: "photo")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(Color(hex: "5A5249"))
+                        )
+                        .overlay(RoundedRectangle(cornerRadius: r).stroke(Theme.borderRead, lineWidth: 1))
+                        .shadow(color: btnShadow, radius: 8, x: 0, y: 2)
                 }
-                Button { showToast("暂未支持") } label: {
-                    VStack(spacing: 3) {
-                        Image(systemName: "arrow.uturn.backward").font(.system(size: 18))
-                        Text("撤销").font(.system(size: 11))
+                .buttonStyle(.plain)
+
+                // 撤销 | 重做
+                HStack(spacing: 0) {
+                    Button { showToast("暂未支持") } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(Color(hex: "3A352E"))
+                            .frame(width: 42, height: 42)
                     }
-                    .foregroundStyle(Theme.ink)
-                }
-                Button { showToast("暂未支持") } label: {
-                    VStack(spacing: 3) {
-                        Image(systemName: "arrow.uturn.forward").font(.system(size: 18))
-                        Text("重做").font(.system(size: 11))
+                    .buttonStyle(.plain)
+                    Rectangle().fill(Theme.borderRead).frame(width: 1, height: 24)
+                    Button { showToast("暂未支持") } label: {
+                        Image(systemName: "arrow.uturn.forward")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(Color(hex: "C9BFB0"))
+                            .frame(width: 42, height: 42)
                     }
-                    .foregroundStyle(Theme.ink)
+                    .buttonStyle(.plain)
                 }
+                .background(Theme.card, in: RoundedRectangle(cornerRadius: r))
+                .overlay(RoundedRectangle(cornerRadius: r).stroke(Theme.borderRead, lineWidth: 1))
+                .shadow(color: btnShadow, radius: 8, x: 0, y: 2)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16).padding(.vertical, 8)
-            .background(Theme.card)
-            .overlay(Rectangle().frame(height: 1).foregroundStyle(Theme.borderRead), alignment: .bottom)
-            .shadow(color: .black.opacity(0.06), radius: 4, x: 0, y: 2)
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .padding(.horizontal, 18).padding(.top, 6).padding(.bottom, 14)
+            .transition(.opacity)
+        } else {
+            playerCard
+                .padding(.horizontal, 20).padding(.top, 6)
+                .transition(.opacity)
         }
     }
 
@@ -188,34 +228,47 @@ struct RecordingDetailView: View {
                 .accessibilityLabel("返回")
             Spacer()
             if !articles.isEmpty {
-                Menu {
-                    Button { Task { await publishWechatTapped() } } label: {
-                        Label(published ? "更新公众号草稿" : "发布公众号草稿", systemImage: "paperplane")
+                let isEditing = dictation.isRecording || agent.state == .working
+                if isEditing {
+                    // 编辑中胶囊标签替换 ⋯ 菜单
+                    HStack(spacing: 6) {
+                        Circle().fill(Color(hex: "D8593B")).frame(width: 7, height: 7)
+                        Text("编辑中")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(Color(hex: "C24A2E"))
                     }
-                    Toggle(isOn: Binding(
-                        get: { sharedToCommunity },
-                        set: { newValue in Task { await toggleCommunity(newValue) } }
-                    )) {
-                        Label("VD社区可见", systemImage: "person.2")
-                    }
-                    Button { Task { await share() } } label: {
-                        Label("分享", systemImage: "square.and.arrow.up")
-                    }
-                    Divider()
-                    Button(role: .destructive) { confirmDeleteFromDetail = true } label: {
-                        Label("删除录音", systemImage: "trash")
-                    }
-                } label: {
-                    RoundedRectangle(cornerRadius: Theme.R.nav)
-                        .fill(Theme.ink)
-                        .frame(width: 38, height: 38)
-                        .overlay {
-                            if publishing { ProgressView().tint(.white) }
-                            else { Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white) }
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .background(Color(hex: "F6E4DC"), in: Capsule())
+                } else {
+                    Menu {
+                        Button { Task { await publishWechatTapped() } } label: {
+                            Label(published ? "更新公众号草稿" : "发布公众号草稿", systemImage: "paperplane")
                         }
-                        .navButtonShadow()
+                        Toggle(isOn: Binding(
+                            get: { sharedToCommunity },
+                            set: { newValue in Task { await toggleCommunity(newValue) } }
+                        )) {
+                            Label("VD社区可见", systemImage: "person.2")
+                        }
+                        Button { Task { await share() } } label: {
+                            Label("分享", systemImage: "square.and.arrow.up")
+                        }
+                        Divider()
+                        Button(role: .destructive) { confirmDeleteFromDetail = true } label: {
+                            Label("删除录音", systemImage: "trash")
+                        }
+                    } label: {
+                        RoundedRectangle(cornerRadius: Theme.R.nav)
+                            .fill(Theme.ink)
+                            .frame(width: 38, height: 38)
+                            .overlay {
+                                if publishing { ProgressView().tint(.white) }
+                                else { Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white) }
+                            }
+                            .navButtonShadow()
+                    }
+                    .accessibilityLabel("更多")
                 }
-                .accessibilityLabel("更多")
             }
         }
         .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 8)
@@ -265,28 +318,32 @@ struct RecordingDetailView: View {
     // MARK: Article pane
 
     private var articlePane: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                playerCard.padding(.top, 6)
+        VStack(spacing: 0) {
+            // 播放条 / 编辑工具行：固定在 ScrollView 外，切换时正文不跳动
+            playerEditHeader
+                .animation(.easeInOut(duration: 0.2), value: dictation.isRecording || agent.state == .working)
 
-                if let a = articles[safe: articleIndex] {
-                    Text(a.title)
-                        .font(.system(size: 23, weight: .semibold)).foregroundStyle(Theme.inkRead)
-                        .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 26)
-                    Text(recording.displayTitle)
-                        .font(.system(size: 13)).foregroundStyle(Theme.metaRead)
-                        .padding(.top, 8)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let a = articles[safe: articleIndex] {
+                        Text(a.title)
+                            .font(.system(size: 23, weight: .semibold)).foregroundStyle(Theme.inkRead)
+                            .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 20)
+                        Text(recording.displayTitle)
+                            .font(.system(size: 13)).foregroundStyle(Theme.metaRead)
+                            .padding(.top, 8)
 
-                    if articles.count > 1 { chipRow.padding(.top, 16) }
+                        if articles.count > 1 { chipRow.padding(.top, 16) }
 
-                    articleBody(a).padding(.top, articles.count > 1 ? 16 : 20)
+                        articleBody(a).padding(.top, articles.count > 1 ? 16 : 20)
+                    }
                 }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 8)
+            .contentMargins(.bottom, 96, for: .scrollContent)   // clear the floating pill
         }
-        .contentMargins(.bottom, 96, for: .scrollContent)   // clear the floating pill
     }
 
     /// One rendered row of the body: a numbered text paragraph, or a numbered image.
@@ -556,10 +613,10 @@ struct RecordingDetailView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 15)
         .background(RoundedRectangle(cornerRadius: Theme.R.primary)
-            .fill(recording ? Theme.accent : Theme.card))
+            .fill((recording || working) ? Theme.accent : Theme.card))
         .overlay(RoundedRectangle(cornerRadius: Theme.R.primary)
-            .stroke(recording ? Color(hex: "C94A2E") : Theme.borderRead, lineWidth: 1))
-        .shadow(color: recording ? Color(.sRGB, red: 216/255, green: 89/255, blue: 59/255, opacity: 0.30) : .clear,
+            .stroke((recording || working) ? Color(hex: "C94A2E") : Theme.borderRead, lineWidth: 1))
+        .shadow(color: (recording || working) ? Color(.sRGB, red: 216/255, green: 89/255, blue: 59/255, opacity: 0.30) : .clear,
                 radius: 7, x: 0, y: 4)
         .contentShape(RoundedRectangle(cornerRadius: Theme.R.primary))
         .gesture(holdGesture())
