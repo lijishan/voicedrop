@@ -183,21 +183,39 @@ struct RecordingDetailView: View {
             let formatter = DateFormatter()
             formatter.dateFormat = "yyyy-MM-dd-HHmmss"
 
+            var agentImages: [AgentImage] = []
             var relKeys: [String] = []
             for photo in captured {
                 let captureTs = formatter.string(from: photo.date)
                 guard let key = await store.uploadPhoto(data: photo.data, sessionTs: sessionTs, captureTs: captureTs)
                 else { showToast("图片上传失败"); return }
                 relKeys.append(key)
+                // Generate a 320×320 thumbnail and base64-encode it for the model to see.
+                if let thumb = makeThumbnail(from: photo.data) {
+                    agentImages.append(AgentImage(key: key, base64: thumb.base64EncodedString()))
+                }
             }
 
             let startCount = doc?.photos?.count ?? 0
             let keysDesc = relKeys.enumerated()
-                .map { "\($0.element)(第\(startCount + $0.offset + 1)张)" }
+                .map { "第\(startCount + $0.offset + 1)张(key:\($0.element))" }
                 .joined(separator: "、")
-            agent.enqueue("请将刚上传的\(relKeys.count == 1 ? "照片" : "\(relKeys.count)张照片") \(keysDesc) 加入文章，在最合适的位置依次插入[[photo:N]]标记，并确保photos数组包含这些key。如无法判断位置，放在结尾。")
+            let countWord = relKeys.count == 1 ? "这张照片" : "这\(relKeys.count)张照片"
+            agent.enqueue(
+                "我刚拍了\(countWord)(\(keysDesc))，请把\(relKeys.count == 1 ? "它" : "每一张都")插入文章里最合适的位置，用[[photo:N]]标记，N是照片在photos数组里的序号（从1起）。所有照片必须全部插入，不能遗漏。",
+                images: agentImages
+            )
             showToast("图片已上传，AI正在插入…")
         }
+    }
+
+    /// Resize image data to a 320×320 JPEG thumbnail for sending to the model.
+    private func makeThumbnail(from data: Data, side: Int = 320) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let size = CGSize(width: side, height: side)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }.jpegData(compressionQuality: 0.7)
     }
 
     // MARK: Nav bar

@@ -3,6 +3,13 @@ import Observation
 
 enum AgentState: Equatable { case idle, connecting, working, error }
 
+/// A 320×320 thumbnail to send alongside a voice instruction so the model
+/// can see the image content and decide where to place it.
+struct AgentImage: Equatable {
+    let key: String      // relative R2 key, e.g. "photos/2026-06-25-131500/ts.jpg"
+    let base64: String   // base64-encoded JPEG
+}
+
 /// A live WebSocket conversation with the article-editing Agent (Cloudflare
 /// Durable Object behind wss://jianshuo.dev/agent/edit). You `connect` once for a
 /// recording, `send` spoken instructions, and each time the server finishes
@@ -12,8 +19,12 @@ enum AgentState: Equatable { case idle, connecting, working, error }
 @MainActor
 @Observable
 final class ArticleAgentSession {
-    /// One queued spoken instruction.
-    struct EditRequest: Identifiable, Equatable { let id = UUID(); let text: String }
+    /// One queued spoken instruction, optionally with image thumbnails attached.
+    struct EditRequest: Identifiable, Equatable {
+        let id = UUID()
+        let text: String
+        let images: [AgentImage]   // empty for text-only edits
+    }
 
     var state: AgentState = .idle
     var error: String?
@@ -63,13 +74,13 @@ final class ArticleAgentSession {
         if !queue.isEmpty { processing = false; pump() }   // resume after a reconnect
     }
 
-    /// Queue a spoken instruction. Edits run strictly serially — the next is sent
-    /// only after the previous one's rewrite returns — so each builds on the last
-    /// result. Keep talking; requests pile up and drain one at a time.
-    func enqueue(_ instruction: String) {
+    /// Queue a spoken instruction, optionally with image thumbnails so the model
+    /// can see the photos and decide where to insert them.
+    /// Edits run strictly serially — each builds on the previous result.
+    func enqueue(_ instruction: String, images: [AgentImage] = []) {
         let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        queue.append(EditRequest(text: text))
+        queue.append(EditRequest(text: text, images: images))
         pump()
     }
 
@@ -79,7 +90,10 @@ final class ArticleAgentSession {
         processing = true
         state = .working
         error = nil
-        let payload: [String: String] = ["type": "instruct", "text": head.text]
+        var payload: [String: Any] = ["type": "instruct", "text": head.text]
+        if !head.images.isEmpty {
+            payload["images"] = head.images.map { ["key": $0.key, "data": $0.base64, "mediaType": "image/jpeg"] }
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let str = String(data: data, encoding: .utf8) else { return }
         task.send(.string(str)) { [weak self] err in
