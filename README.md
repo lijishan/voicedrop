@@ -73,6 +73,12 @@ open VoiceDrop.xcodeproj                 # 数据线连真机直接 Run（最简
 
 ---
 
+## 技术文档
+
+- [文章版本控制与撤销/重做](docs/article-versioning.md) — head 指针模型、schema-3 格式、API 路由
+
+---
+
 ## 给未来 agent 的指北
 
 - **改 App 行为** → 这个 repo。设计的单一事实源是 `docs/superpowers/specs/2026-06-18-voicedrop-design.md`，先读它。
