@@ -312,8 +312,9 @@ final class LibraryStore {
     }
 
     /// Delete only the generated article + every marker (json/srt/empty), keeping
-    /// the audio. The recording drops back to 待处理 and the server re-mines it on
-    /// the next cycle, regenerating the article. Reloads to reflect the new state.
+    /// the audio, then kick the miner so it re-mines this recording right away
+    /// (the marker is gone → mine.py treats it as unprocessed). The row flips back
+    /// to 待处理 → 听录音 → 挖文章 → 已成文 with fresh content. Reloads to reflect state.
     @discardableResult
     func deleteArticle(_ rec: Recording) async -> Bool {
         guard !token.isEmpty else { error = "请先登录"; return false }
@@ -321,8 +322,20 @@ final class LibraryStore {
         _ = await del(rec.srtKey)
         _ = await del(rec.emptyKey)
         titleCache[rec.articleKey] = nil   // re-mined article may have a new title
+        await dispatchMine()               // trigger a fresh mine cycle now
         await load()
         return true
+    }
+
+    /// Kick the server article miner (POST /mine → dispatches the mine.yml
+    /// workflow). Best-effort — the recording is already back to unprocessed, so
+    /// even if this fails the next upload-triggered cycle will pick it up.
+    private func dispatchMine() async {
+        guard let url = URL(string: "\(base.absoluteString)/mine") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        _ = try? await URLSession.shared.data(for: req)
     }
 
     /// DELETE one key. Treats 2xx and 404 as success (idempotent).

@@ -166,7 +166,9 @@ gear → **设置** (redesign "方案二"; the old `ContentView` 3-tab `TabView`
   take shows an **optimistic 待处理** row immediately (same `audioName` = same row id, so the badge changes
   in place — no disappear/flicker). 已成文 rows show the **article title** (concurrent fetch, cached by
   articleKey). Swipe-left → red **删除整条录音** (optimistic). **Easter egg**: long-press the 已成文 badge →
-  重新处理这篇文章 (delete article+markers, keep audio, re-mine).
+  重新生成这篇文章 (`deleteArticle`: delete article+markers, keep audio, then **`POST /files/api/mine`** to
+  kick mine.yml right away — the row re-flows 待处理→听录音→挖文章→已成文; not "next cycle"). Confirm alert
+  copy: 「重新生成这篇文章？／重新生成／删掉当前文章、保留录音，立即重新挖一遍。生成的内容可能和原来不同。」
 - **VD社区** — see the Community section above.
 - **录音 (takeover)** `RecordSession.swift` — full-screen, opens **idle** (tap-to-record). Records to a
   **staging name** `recording-<ts>.m4a`, promoted to the enriched `VoiceDrop-*` name only after finalize

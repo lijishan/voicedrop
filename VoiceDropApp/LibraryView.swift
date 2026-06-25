@@ -46,12 +46,12 @@ struct LibraryView: View {
                 Button("删除", role: .destructive) { Task { await store.delete(rec) } }
                 Button("取消", role: .cancel) {}
             } message: { _ in Text("音频和已挖出的文章都会从云端删除，不可恢复。") }
-            .alert("重新处理这篇文章？", isPresented: .init(
+            .alert("重新生成这篇文章？", isPresented: .init(
                 get: { confirmReprocess != nil }, set: { if !$0 { confirmReprocess = nil } }
             ), presenting: confirmReprocess) { rec in
-                Button("删除文章并重新生成", role: .destructive) { Task { await store.deleteArticle(rec) } }
+                Button("重新生成", role: .destructive) { Task { await store.deleteArticle(rec) } }
                 Button("取消", role: .cancel) {}
-            } message: { _ in Text("会删掉已生成的文章、保留录音，下个周期重新挖一遍。") }
+            } message: { _ in Text("删掉当前文章、保留录音，立即重新挖一遍。生成的内容可能和原来不同。") }
             .alert("从社区移除？", isPresented: .init(
                 get: { confirmUnshare != nil }, set: { if !$0 { confirmUnshare = nil } }
             ), presenting: confirmUnshare) { post in
