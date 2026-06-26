@@ -82,12 +82,15 @@ final class AuthStore {
 
     /// Exchange a Sign-in-with-Apple identity token for a long-lived session JWT.
     /// On success the session is persisted and `isAuthenticated` flips true.
-    func exchange(identityToken: String) async {
+    func exchange(identityToken: String, fullName: String? = nil, email: String? = nil) async {
         var req = URLRequest(url: authURL)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(anonToken)", forHTTPHeaderField: "Authorization")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["identityToken": identityToken])
+        var payload: [String: Any] = ["identityToken": identityToken]
+        if let fullName { payload["fullName"] = fullName }
+        if let email { payload["email"] = email }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -119,7 +122,7 @@ final class AuthStore {
     func signInWithApple() async {
         defer { appleCoordinator = nil }
         let req = ASAuthorizationAppleIDProvider().createRequest()
-        req.requestedScopes = [.fullName]
+        req.requestedScopes = [.fullName, .email]
         do {
             let auth = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ASAuthorization, Error>) in
                 let c = AppleSignInCoordinator(cont)
@@ -135,7 +138,13 @@ final class AuthStore {
                   let idToken = String(data: tokenData, encoding: .utf8) else {
                 lastError = "登录失败（无身份令牌）"; return
             }
-            await exchange(identityToken: idToken)
+            // Apple hands over fullName/email ONLY on the first authorization — capture
+            // them now and forward to the server, or they are gone for good.
+            let displayName: String? = cred.fullName.flatMap {
+                let s = PersonNameComponentsFormatter().string(from: $0)
+                return s.isEmpty ? nil : s
+            }
+            await exchange(identityToken: idToken, fullName: displayName, email: cred.email)
         } catch {
             lastError = error.localizedDescription
         }
