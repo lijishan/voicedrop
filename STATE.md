@@ -41,8 +41,13 @@ public web  jianshuo.dev/voicedrop/<token> ──> renders one article set (ligh
 ⚠️ **CF same-zone fetch gotcha (2026-06-25):** Pages Functions cannot `fetch('https://jianshuo.dev/agent/...')` to call the Worker zone route — CF routes same-zone internal fetches through Pages routing first, which returns 405 for POST on static paths (Worker never sees the request). **Fix**: `dispatchMine` uses `https://voicedrop-agent.jianshuo.workers.dev/agent/mine/trigger` (the Worker's `workers_dev` subdomain), bypassing Pages routing entirely. `wrangler.jsonc` must have `"workers_dev": true`.
 
 Auth: per-user. App holds an anonymous capability token (`anon_…`, iCloud
-Keychain) OR a Sign-in-with-Apple session JWT. Server admin token = `FILES_TOKEN`
-(sees all `users/*`). Files API scopes every request to `users/<sub>/`.
+Keychain) OR a Sign-in-with-Apple session JWT. **The app sends the anon token by
+default for ALL calls (`AuthStore.bearer = anonToken`, 2026-06-27); the session JWT is
+sent ONLY for the two server-gated community WRITES — share / unshare — which 403 a
+non-Apple token. Apple sign-in just BINDS the Apple ID to the existing anon box, so the
+session's scope is itself `users/anon-<hash>/` — anon and session resolve to the SAME
+scope/user_sub.** Server admin token = `FILES_TOKEN` (sees all `users/*`). Files API
+scopes every request to `users/<sub>/`.
 
 ## R2 layout & marker conventions (the contract everyone shares)
 
@@ -221,7 +226,11 @@ on their own posts.
   `(1 + view·1+finish·4+like·3+reply·5)/(ageHours+2)^1.5` + 作者打散。
 - 互动上报：详情页进帖→view、滚到文底→finish、❤️→like（`POST /reco/engage/<shareId>`，fire-and-forget）。
   ❤️ **不显示计数**，只反映"我赞过没"。
-- reco **不碰 R2、不反调核心**，仅共享 `SESSION_SECRET` 值独立验 token。部署独立：
+- reco **完全独立：不碰 R2、不反调核心、不共享任何 secret**（2026-06-27 改）。互动上报用 app 的
+  **anon token** 鉴权（`CommunityStore` 的 engage/rank 发 `AuthStore.anonToken`）——因为 Apple
+  登录的 session scope 本身就是 `users/anon-<hash>/`，anon 与 session 解析出同一个 user_sub，所以
+  reco **无需 SESSION_SECRET** 也能正确识别所有用户（含 Apple 登录者）。**reco 上当前未设、也不需要
+  SESSION_SECRET**（auth.js 仍保留验 JWT 的死代码，无害）。部署独立：
   `cd ~/code/jianshuo.dev/reco && npx wrangler deploy`。
 - **token 计费未做**：将来单独 spec + 单独 D1 库 `voicedrop-usage`，不进 engagement、不进 reco。
 
