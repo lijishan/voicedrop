@@ -89,10 +89,12 @@ struct RecordSession: View {
     /// Bottom controls (design "Navigation.dc.html" frame ②): three equal columns —
     /// an empty left column mirrors the right, the 停止 key stays centered on screen,
     /// and the visible 拍照 button sits centered in the right blank area (replaces the
-    /// old invisible right-side tap area). Camera uses AVCaptureSession (video-only)
-    /// so recording is not interrupted.
+    /// old invisible right-side tap area). Columns are **bottom-aligned** so the two
+    /// labels (点击停止 / 拍照) share one line and both buttons sit on the same floor —
+    /// 停止 is the tallest column, so it anchors the bar height and never moves. Camera
+    /// uses AVCaptureSession (video-only) so recording is not interrupted.
     private var bottomBar: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .bottom, spacing: 0) {
             Color.clear.frame(maxWidth: .infinity)   // empty left mirrors the right column
 
             VStack(spacing: 7) {
