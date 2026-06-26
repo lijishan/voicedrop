@@ -65,57 +65,48 @@ struct RecordSession: View {
     // MARK: Recording (frame ②)
 
     private var recordingScreen: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    Circle().fill(Theme.recordRed).frame(width: 9, height: 9)
-                    Text("正在录音").font(.system(size: 14)).tracking(2).foregroundStyle(Theme.secondary)
-                }
-                .padding(.top, 64)
-
-                Spacer()
-                VStack(spacing: 34) {
-                    Text(timeString(recorder.elapsed))
-                        .font(.system(size: 78, weight: .ultraLight).monospacedDigit())
-                        .foregroundStyle(Theme.ink)
-                        .contentTransition(.numericText())
-                    waveform
-                }
-                Spacer()
-
-                VStack(spacing: 7) {
-                    Button { Task { await stop() } } label: {
-                        Circle().fill(Theme.card).frame(width: 66, height: 66)
-                            .overlay(Circle().stroke(Color(hex: "E8DECF"), lineWidth: 1))
-                            .overlay(RoundedRectangle(cornerRadius: 6).fill(Theme.recordRed).frame(width: 26, height: 26))
-                            .shadow(color: .black.opacity(0.06), radius: 7, x: 0, y: 4)
-                    }
-                    .buttonStyle(.plain).accessibilityLabel("停止")
-                    Text("点击停止").font(.system(size: 12)).tracking(1).foregroundStyle(Theme.secondary)
-                }
-                .padding(.bottom, 26)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Circle().fill(Theme.recordRed).frame(width: 9, height: 9)
+                Text("正在录音").font(.system(size: 14)).tracking(2).foregroundStyle(Theme.secondary)
             }
+            .padding(.top, 64)
 
-            // Faint photo trigger: a very subtle camera icon centered in the right
-            // blank area (equal space on both sides — an empty left column mirrors
-            // the right), discoverable but unobtrusive. Overlaid, so the 停止 key
-            // never shifts. Uses AVCaptureSession (video-only) so recording is not
-            // interrupted.
-            VStack {
-                Spacer()
-                HStack(spacing: 0) {
-                    Color.clear.frame(maxWidth: .infinity)   // empty left mirrors the right
+            Spacer()
+            VStack(spacing: 34) {
+                Text(timeString(recorder.elapsed))
+                    .font(.system(size: 78, weight: .ultraLight).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                    .contentTransition(.numericText())
+                waveform
+            }
+            Spacer()
+
+            VStack(spacing: 7) {
+                Button { Task { await stop() } } label: {
+                    Circle().fill(Theme.card).frame(width: 66, height: 66)
+                        .overlay(Circle().stroke(Color(hex: "E8DECF"), lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: 6).fill(Theme.recordRed).frame(width: 26, height: 26))
+                        .shadow(color: .black.opacity(0.06), radius: 7, x: 0, y: 4)
+                }
+                .buttonStyle(.plain).accessibilityLabel("停止")
+                // Faint 拍照 trigger: a very subtle camera icon directly to the right of
+                // the 停止 circle, on the same vertical line. Overlaid on the 停止 button
+                // (offset right) so the 停止 key stays centered and never shifts. Camera
+                // uses AVCaptureSession (video-only) so recording is not interrupted.
+                .overlay(alignment: .center) {
                     Image(systemName: "camera")
                         .font(.system(size: 26, weight: .light))
                         .foregroundStyle(Theme.faint.opacity(0.5))
-                        .frame(width: 110, height: 120)
+                        .frame(width: 60, height: 60)
                         .contentShape(Rectangle())
                         .onTapGesture { Task { await openCamera() } }
                         .accessibilityLabel("拍照")
-                        .frame(maxWidth: .infinity)   // center in the right half
+                        .offset(x: 64)
                 }
-                .padding(.bottom, 10)
+                Text("点击停止").font(.system(size: 12)).tracking(1).foregroundStyle(Theme.secondary)
             }
+            .padding(.bottom, 26)
         }
     }
 
