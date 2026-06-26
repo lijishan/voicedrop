@@ -104,10 +104,17 @@ def submit(audio_url):
     r = requests.post(SUBMIT_URL, json=body, headers=hdrs, timeout=30)
     r.raise_for_status()
     status_code = r.headers.get("X-Api-Status-Code", "")
-    if status_code != str(STATUS_DONE):
-        print(f"Submit: HTTP {r.status_code} status={status_code} body={r.text[:200]}",
-              file=sys.stderr)
-        raise AsrFail(status_code or f"submit-http-{r.status_code}")
+    # A successful submit returns DONE ("request accepted"). The API may also
+    # transiently hand back QUEUED/PROCESSING — the task is still accepted, so go
+    # poll. Any OTHER status at submit time (rate-limit, server-busy, auth) is an
+    # operational hiccup, NOT a verdict about THIS audio's content. Treat it as a
+    # transient failure (exit 1, retry) — never AsrFail (exit 4), which would
+    # permanently mark a recording that DOES have speech as "no speech" and lose
+    # it. The genuine per-audio deterministic check stays in poll() below.
+    if status_code not in (str(STATUS_DONE), str(STATUS_QUEUED), str(STATUS_PROCESSING)):
+        print(f"Submit transient failure: HTTP {r.status_code} status={status_code} "
+              f"body={r.text[:200]} — will retry", file=sys.stderr)
+        sys.exit(1)
     logid = r.headers.get("X-Tt-Logid", "")
     print(f"[asr] submitted task={task_id[:8]}…", file=sys.stderr)
     return task_id, logid
