@@ -65,52 +65,66 @@ struct RecordSession: View {
     // MARK: Recording (frame ②)
 
     private var recordingScreen: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    Circle().fill(Theme.recordRed).frame(width: 9, height: 9)
-                    Text("正在录音").font(.system(size: 14)).tracking(2).foregroundStyle(Theme.secondary)
-                }
-                .padding(.top, 64)
-
-                Spacer()
-                VStack(spacing: 34) {
-                    Text(timeString(recorder.elapsed))
-                        .font(.system(size: 78, weight: .ultraLight).monospacedDigit())
-                        .foregroundStyle(Theme.ink)
-                        .contentTransition(.numericText())
-                    waveform
-                }
-                Spacer()
-
-                VStack(spacing: 7) {
-                    Button { Task { await stop() } } label: {
-                        Circle().fill(Theme.card).frame(width: 66, height: 66)
-                            .overlay(Circle().stroke(Color(hex: "E8DECF"), lineWidth: 1))
-                            .overlay(RoundedRectangle(cornerRadius: 6).fill(Theme.recordRed).frame(width: 26, height: 26))
-                            .shadow(color: .black.opacity(0.06), radius: 7, x: 0, y: 4)
-                    }
-                    .buttonStyle(.plain).accessibilityLabel("停止")
-                    Text("点击停止").font(.system(size: 12)).tracking(1).foregroundStyle(Theme.secondary)
-                }
-                .padding(.bottom, 26)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Circle().fill(Theme.recordRed).frame(width: 9, height: 9)
+                Text("正在录音").font(.system(size: 14)).tracking(2).foregroundStyle(Theme.secondary)
             }
+            .padding(.top, 64)
 
-            // Hidden photo trigger: tap the right-side empty area next to the stop button.
-            // Uses AVCaptureSession (video-only) so recording is not interrupted.
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    Color.clear
-                        .frame(width: 110, height: 120)
-                        .contentShape(Rectangle())
-                        .onTapGesture { Task { await openCamera() } }
-                        .padding(.trailing, 16)
-                        .padding(.bottom, 10)
-                }
+            Spacer()
+            VStack(spacing: 34) {
+                Text(timeString(recorder.elapsed))
+                    .font(.system(size: 78, weight: .ultraLight).monospacedDigit())
+                    .foregroundStyle(Theme.ink)
+                    .contentTransition(.numericText())
+                waveform
             }
+            Spacer()
+
+            bottomBar
         }
+    }
+
+    /// Bottom controls (design "Navigation.dc.html" frame ②): three equal columns —
+    /// an empty left column mirrors the right, the 停止 key stays centered on screen,
+    /// and the visible 拍照 button sits centered in the right blank area (replaces the
+    /// old invisible right-side tap area). Camera uses AVCaptureSession (video-only)
+    /// so recording is not interrupted.
+    private var bottomBar: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(maxWidth: .infinity)   // empty left mirrors the right column
+
+            VStack(spacing: 7) {
+                Button { Task { await stop() } } label: {
+                    Circle().fill(Theme.card).frame(width: 66, height: 66)
+                        .overlay(Circle().stroke(Color(hex: "E8DECF"), lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: 6).fill(Theme.recordRed).frame(width: 26, height: 26))
+                        .shadow(color: .black.opacity(0.06), radius: 7, x: 0, y: 4)
+                }
+                .buttonStyle(.plain).accessibilityLabel("停止")
+                Text("点击停止").font(.system(size: 12)).tracking(1).foregroundStyle(Theme.secondary)
+            }
+            .frame(maxWidth: .infinity)
+
+            VStack(spacing: 8) {
+                Button { Task { await openCamera() } } label: {
+                    Circle()
+                        .fill(LinearGradient(colors: [Color(hex: "FFFFFF"), Color(hex: "FBF7F0")],
+                                             startPoint: .top, endPoint: .bottom))
+                        .frame(width: 50, height: 50)
+                        .overlay(Circle().stroke(Color(hex: "EFE6D7"), lineWidth: 1))
+                        .overlay(Image(systemName: "camera").font(.system(size: 20, weight: .light))
+                            .foregroundStyle(Color(hex: "7A6F60")))
+                        .shadow(color: Color(hex: "B48C64").opacity(0.14), radius: 8, x: 0, y: 6)
+                }
+                .buttonStyle(.plain).accessibilityLabel("拍照")
+                Text("拍照").font(.system(size: 11)).tracking(2).foregroundStyle(Theme.metaChrome)
+            }
+            .frame(maxWidth: .infinity)   // 拍照 centered in the right blank area
+        }
+        .padding(.top, 14)
+        .padding(.bottom, 26)
     }
 
     private var waveform: some View {
