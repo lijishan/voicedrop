@@ -127,3 +127,161 @@ struct DeviceLinkApprovalSheet: View {
         .presentationDetents([.height(320)])
     }
 }
+
+// MARK: - New-device side: enter old account's 6-hex, then the 4-digit code, adopt the token.
+@MainActor
+@Observable
+final class DeviceLinkStore: NSObject, URLSessionWebSocketDelegate {
+    enum Phase { case enterId, enterCode, working, done, error }
+    var phase: Phase = .enterId
+    var message: String = ""
+
+    private let httpBase = URL(string: "https://jianshuo.dev/agent/link")!
+    private var priv: Curve25519.KeyAgreement.PrivateKey?
+    private var pairingId: String?
+    private var ws: URLSessionWebSocketTask?
+
+    func reset() { ws?.cancel(); ws = nil; priv = nil; pairingId = nil; phase = .enterId; message = "" }
+
+    // Step 1: send the 6-hex prefix + ephemeral pubkey; open the wait-socket.
+    func start(prefix: String) {
+        let hex = prefix.trimmingCharacters(in: .whitespaces).lowercased()
+        guard hex.range(of: "^[0-9a-f]{6}$", options: .regularExpression) != nil else {
+            message = "请输入 6 位代码（设置→账户里那串）"; return
+        }
+        phase = .working; message = ""
+        let (p, pub) = DeviceLinkCrypto.newKeypair()
+        priv = p
+        Task {
+            do {
+                let r = try await postJSON("start", ["prefix": hex, "pubkey": pub])
+                if (r["ok"] as? Bool) != true {
+                    message = (r["reason"] as? String) == "no_match" ? "没找到这个账号，确认老设备设置页的 6 位码" : "发起失败"
+                    phase = .error; return
+                }
+                guard let pid = r["pairingId"] as? String else { phase = .error; message = "发起失败"; return }
+                pairingId = pid
+                openSocket(pairingId: pid)
+                phase = .enterCode
+            } catch { phase = .error; message = "网络错误" }
+        }
+    }
+
+    // Step 2: submit the 4-digit code shown on the old device.
+    func submit(code: String) {
+        guard let pid = pairingId, code.range(of: "^[0-9]{4}$", options: .regularExpression) != nil else {
+            message = "请输入 4 位验证码"; return
+        }
+        phase = .working; message = ""
+        Task {
+            do {
+                let r = try await postJSON("verify", ["pairingId": pid, "code": code])
+                if (r["ok"] as? Bool) == true {
+                    message = "正在接收账号…"   // wait for link_ready on the socket
+                } else if (r["dead"] as? Bool) == true || (r["expired"] as? Bool) == true {
+                    phase = .error; message = "验证已失效，请重新发起"
+                } else {
+                    let rem = r["remaining"] as? Int ?? 0
+                    phase = .enterCode; message = "验证码不对，还可试 \(rem) 次"
+                }
+            } catch { phase = .error; message = "网络错误" }
+        }
+    }
+
+    private func openSocket(pairingId: String) {
+        var comps = URLComponents(string: "wss://jianshuo.dev/agent/link/socket")!
+        comps.queryItems = [URLQueryItem(name: "pairingId", value: pairingId)]
+        let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+        let task = session.webSocketTask(with: comps.url!)
+        ws = task
+        task.resume()
+        receive()
+    }
+
+    private func receive() {
+        ws?.receive { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                if case .success(let msg) = result {
+                    if case .string(let s) = msg { self.handle(s) }
+                    self.receive()
+                }
+            }
+        }
+    }
+
+    private func handle(_ s: String) {
+        guard let d = s.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let type = o["type"] as? String else { return }
+        switch type {
+        case "link_ready":
+            guard let blob = o["blob"] as? [String: Any],
+                  let epk = blob["epk"] as? String, let sealed = blob["sealed"] as? String,
+                  let priv = self.priv else { phase = .error; message = "解密失败"; return }
+            do {
+                let token = try DeviceLinkCrypto.decrypt(epkB64: epk, sealedB64: sealed, priv: priv)
+                AuthStore.shared.adoptToken(token)
+                NotificationCenter.default.post(name: .vdDidAdoptAccount, object: nil)
+                phase = .done; message = "登录成功"
+                ws?.cancel(); ws = nil
+            } catch { phase = .error; message = "解密失败" }
+        case "link_cancelled": phase = .error; message = "对方已拒绝"
+        case "link_expired": phase = .error; message = "已超时，请重新发起"
+        default: break
+        }
+    }
+
+    private func postJSON(_ path: String, _ body: [String: Any]) async throws -> [String: Any] {
+        var req = URLRequest(url: httpBase.appending(path: path))
+        req.httpMethod = "POST"
+        req.setBearer(AuthStore.shared.bearer)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, _) = try await URLSession.shared.data(for: req)
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    }
+}
+
+extension Notification.Name { static let vdDidAdoptAccount = Notification.Name("VDDidAdoptAccount") }
+
+struct DeviceLinkView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var store = DeviceLinkStore()
+    @State private var idInput = ""
+    @State private var codeInput = ""
+
+    var body: some View {
+        VStack(spacing: 20) {
+            switch store.phase {
+            case .enterId, .working where store.message.isEmpty:
+                Text("登录已有账号").font(.system(size: 20, weight: .semibold))
+                Text("在老设备「设置 → 账户」看到的 6 位代码").font(.system(size: 13)).foregroundStyle(.secondary)
+                TextField("6 位代码", text: $idInput)
+                    .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                    .font(.system(size: 22, design: .monospaced)).multilineTextAlignment(.center)
+                    .textFieldStyle(.roundedBorder)
+                Button("继续") { store.start(prefix: idInput) }.buttonStyle(.borderedProminent)
+            case .enterCode:
+                Text("输入验证码").font(.system(size: 20, weight: .semibold))
+                Text("老设备上弹出的 4 位验证码").font(.system(size: 13)).foregroundStyle(.secondary)
+                TextField("4 位", text: $codeInput)
+                    .keyboardType(.numberPad).font(.system(size: 28, design: .monospaced))
+                    .multilineTextAlignment(.center).textFieldStyle(.roundedBorder)
+                Button("验证") { store.submit(code: codeInput) }.buttonStyle(.borderedProminent)
+            case .working:
+                ProgressView()
+            case .done:
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundStyle(.green)
+                Text("登录成功").font(.system(size: 18, weight: .semibold))
+                Button("完成") { dismiss() }.buttonStyle(.borderedProminent)
+            case .error:
+                Image(systemName: "xmark.circle.fill").font(.system(size: 40)).foregroundStyle(.red)
+                Button("重试") { codeInput = ""; idInput = ""; store.reset() }.buttonStyle(.bordered)
+            }
+            if !store.message.isEmpty { Text(store.message).font(.system(size: 13)).foregroundStyle(.secondary) }
+        }
+        .padding(28)
+        .presentationDetents([.medium])
+    }
+}

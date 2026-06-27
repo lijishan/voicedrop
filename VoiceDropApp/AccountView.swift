@@ -10,6 +10,7 @@ struct AccountView: View {
     @State private var tokenCopied = false
     @State private var confirmReset = false
     @State private var openingArticles = false
+    @State private var showDeviceLink = false
 
     private var auth: AuthStore { AuthStore.shared }
     private var recordingCount: Int { store.recordings.count }
@@ -43,6 +44,7 @@ struct AccountView: View {
         .background(Theme.appBG.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .task { await store.load() }
+        .sheet(isPresented: $showDeviceLink) { DeviceLinkView() }
         .alert("重置身份？", isPresented: $confirmReset) {
             Button("重置", role: .destructive) { auth.resetAnonymous() }
             Button("取消", role: .cancel) {}
@@ -101,6 +103,11 @@ struct AccountView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            Button { showDeviceLink = true } label: {
+                Label("登录已有账号", systemImage: "iphone.and.arrow.forward")
+            }
+            .buttonStyle(.bordered)
         }
         .padding(18)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: Theme.R.card))

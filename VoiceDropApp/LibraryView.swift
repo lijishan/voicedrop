@@ -93,6 +93,9 @@ struct LibraryView: View {
             if p == .active { statusSession.connect(); Task { await refresh() } }
             else if p == .background { statusSession.disconnect() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .vdDidAdoptAccount)) { _ in
+            Task { await refresh() }
+        }
     }
 
     private func checkPendingReplies(_ recs: [Recording]) {
