@@ -162,6 +162,17 @@ final class AuthStore {
         anonToken = token
     }
 
+    /// Adopt an anon_… token received from another device (device-link login).
+    /// Overwrites the local anon identity in the iCloud Keychain; `anonId`/`bearer`
+    /// recompute automatically (computed properties on an @Observable).
+    func adoptToken(_ token: String) {
+        guard token.hasPrefix("anon_"), token.count >= 20 else { return }
+        session = nil
+        keychainDelete(account: sessionAccount)
+        keychainSave(token, account: anonAccount)
+        anonToken = token
+    }
+
     // MARK: - Keychain (synchronizable = iCloud Keychain)
 
     private func baseQuery(_ account: String) -> [String: Any] {
