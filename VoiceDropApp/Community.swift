@@ -53,10 +53,10 @@ final class CommunityStore {
         loading = true; error = nil
         defer { loading = false }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "list"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { error = "加载失败"; return }
+            guard resp.isOK else { error = "加载失败"; return }
             struct R: Decodable { let posts: [CommunityPost] }
             posts = try JSONDecoder().decode(R.self, from: data).posts
             await applyRanking()
@@ -79,12 +79,12 @@ final class CommunityStore {
         var req = URLRequest(url: recoBase.appending(path: "rank"))
         req.httpMethod = "POST"
         req.timeoutInterval = 2   // timeout → fall back to time-sort
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["posts": payload])
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return }
+            guard resp.isOK else { return }
             struct R: Decodable { let order: [String]; let liked: [String] }
             let r = try JSONDecoder().decode(R.self, from: data)
             likedShareIds = Set(r.liked)
@@ -112,10 +112,10 @@ final class CommunityStore {
     func sharedShareId(_ rec: Recording) async -> String? {
         guard !token.isEmpty, rec.hasArticles else { return nil }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "shared").appending(path: rec.articleKey))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            guard resp.isOK else { return nil }
             struct R: Decodable { let shared: Bool; let shareId: String? }
             let r = try? JSONDecoder().decode(R.self, from: data)
             return r?.shared == true ? r?.shareId : nil
@@ -127,14 +127,14 @@ final class CommunityStore {
     private func postShare(_ rec: Recording, replyTo: String?) async -> String? {
         var req = URLRequest(url: base.appending(path: "community").appending(path: "share").appending(path: rec.articleKey))
         req.httpMethod = "POST"
-        req.setValue("Bearer \(shareToken)", forHTTPHeaderField: "Authorization")
+        req.setBearer(shareToken)
         if let replyTo {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try? JSONEncoder().encode(["replyTo": replyTo])
         }
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             if (200..<300).contains(code) {
                 needsAppleSignIn = false
                 struct R: Decodable { let shareId: String? }
@@ -163,10 +163,10 @@ final class CommunityStore {
     private func postUnshare(_ shareId: String) async -> Bool {
         var req = URLRequest(url: base.appending(path: "community").appending(path: "unshare").appending(path: shareId))
         req.httpMethod = "POST"
-        req.setValue("Bearer \(shareToken)", forHTTPHeaderField: "Authorization")
+        req.setBearer(shareToken)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             if (200..<300).contains(code) { needsAppleSignIn = false; return true }
             needsAppleSignIn = (code == 403) &&
                 ((try? JSONDecoder().decode([String: String].self, from: data))?["error"] == "needs_apple_signin")
@@ -177,10 +177,10 @@ final class CommunityStore {
     func isShared(_ rec: Recording) async -> Bool {
         guard !token.isEmpty, rec.hasArticles else { return false }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "shared").appending(path: rec.articleKey))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return false }
+            guard resp.isOK else { return false }
             struct R: Decodable { let shared: Bool }
             return (try? JSONDecoder().decode(R.self, from: data))?.shared ?? false
         } catch { return false }
@@ -189,10 +189,10 @@ final class CommunityStore {
     func fetchPost(_ shareId: String) async -> CommunityFullPost? {
         guard !token.isEmpty else { return nil }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "get").appending(path: shareId))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            guard resp.isOK else { return nil }
             return try JSONDecoder().decode(CommunityFullPost.self, from: data)
         } catch { return nil }
     }
@@ -202,11 +202,11 @@ final class CommunityStore {
     /// logic everywhere: read straight from the photo's original location.
     func photoData(fullKey: String) async -> Data? {
         guard !fullKey.isEmpty else { return nil }
-        let enc = fullKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? fullKey
+        let enc = fullKey.urlPathEncoded
         guard let url = URL(string: "\(base.absoluteString)/photo/\(enc)") else { return nil }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            guard resp.isOK else { return nil }
             return data
         } catch { return nil }
     }
@@ -218,7 +218,7 @@ final class CommunityStore {
         var req = URLRequest(url: recoBase.appending(path: "engage").appending(path: shareId))
         req.httpMethod = "POST"
         req.timeoutInterval = 3
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = ["action": action]
         if let on { body["on"] = on }
@@ -230,10 +230,10 @@ final class CommunityStore {
     func loadReplies(_ shareId: String) async -> [CommunityPost] {
         guard !token.isEmpty else { return [] }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "replies").appending(path: shareId))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return [] }
+            guard resp.isOK else { return [] }
             struct R: Decodable { let posts: [CommunityPost] }
             return (try? JSONDecoder().decode(R.self, from: data))?.posts ?? []
         } catch { return [] }

@@ -211,7 +211,7 @@ struct RecordSession: View {
         let base = URL(string: "https://jianshuo.dev/files/api")!
         var req = URLRequest(url: base.appending(path: "upload").appending(path: key))
         req.httpMethod = "PUT"
-        req.setValue("Bearer \(AuthStore.shared.bearer)", forHTTPHeaderField: "Authorization")
+        req.setBearer(AuthStore.shared.bearer)
         req.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
         _ = try? await URLSession.shared.upload(for: req, from: data)
     }

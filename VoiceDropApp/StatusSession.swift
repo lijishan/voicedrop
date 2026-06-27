@@ -27,7 +27,7 @@ final class StatusSession {
         let token = AuthStore.shared.bearer
         guard !token.isEmpty, let url = URL(string: base) else { return }
         var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         let s = URLSession(configuration: .default)
         urlSession = s
         let t = s.webSocketTask(with: req)

@@ -207,10 +207,10 @@ final class LibraryStore {
         loading = true; error = nil
         defer { loading = false }
         var req = URLRequest(url: base.appending(path: "list"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else {
+            guard resp.isOK else {
                 error = "加载失败"; return
             }
             let list = try JSONDecoder().decode(ListResponse.self, from: data)
@@ -278,15 +278,15 @@ final class LibraryStore {
     }
 
     private func downloadURL(_ relName: String) -> URL {
-        let enc = relName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? relName
+        let enc = relName.urlPathEncoded
         return URL(string: "\(base.absoluteString)/download/\(enc)")!
     }
 
     private func get(_ relName: String) async throws -> Data {
         var req = URLRequest(url: downloadURL(relName))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         let (data, resp) = try await URLSession.shared.data(for: req)
-        guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else {
+        guard resp.isOK else {
             throw NSError(domain: "library", code: 1, userInfo: [NSLocalizedDescriptionKey: "下载失败"])
         }
         return data
@@ -297,13 +297,13 @@ final class LibraryStore {
     /// head version's articles reconstructed at the top level.
     func fetchDoc(_ rec: Recording) async -> ArticleDoc? {
         guard rec.hasArticles, !token.isEmpty else { return nil }
-        let enc = rec.stem.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? rec.stem
+        let enc = rec.stem.urlPathEncoded
         guard let url = URL(string: "\(base.absoluteString)/articles/\(enc)") else { return nil }
         var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            guard resp.isOK else { return nil }
             return try JSONDecoder().decode(ArticleDoc.self, from: data)
         } catch { return nil }
     }
@@ -363,20 +363,20 @@ final class LibraryStore {
         guard let url = URL(string: "\(base.absoluteString)/mine") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         _ = try? await URLSession.shared.data(for: req)
     }
 
     /// DELETE one key. Treats 2xx and 404 as success (idempotent).
     private func del(_ relName: String) async -> Bool {
-        let enc = relName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? relName
+        let enc = relName.urlPathEncoded
         guard let url = URL(string: "\(base.absoluteString)/file/\(enc)") else { return false }
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (_, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             return (200..<300).contains(code) || code == 404
         } catch { return false }
     }
@@ -391,10 +391,10 @@ final class LibraryStore {
         guard !token.isEmpty, rec.hasArticles else { return nil }
         struct Resp: Decodable { let url: String }
         var req = URLRequest(url: base.appending(path: "share").appending(path: rec.articleKey))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            guard resp.isOK else { return nil }
             let urlStr = try JSONDecoder().decode(Resp.self, from: data).url
             guard var comps = URLComponents(string: urlStr) else { return URL(string: urlStr) }
             comps.queryItems = [URLQueryItem(name: "s", value: String(section))]
@@ -418,10 +418,10 @@ final class LibraryStore {
         guard !token.isEmpty, rec.hasArticles else { return .failed(nil) }
         var req = URLRequest(url: base.appending(path: "wechat").appending(path: rec.articleKey))
         req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             if code == 409 { return .notConfigured }
             if (200..<300).contains(code) {
                 struct R: Decodable { let created: Int?; let updated: Int? }
@@ -451,16 +451,16 @@ final class LibraryStore {
     func uploadPhoto(data: Data, sessionTs: String, offset: Int) async -> String? {
         guard !token.isEmpty else { return nil }
         let relKey = RecordingName.photoKey(sessionTs: sessionTs, offset: offset)
-        let enc = relKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? relKey
+        let enc = relKey.urlPathEncoded
         guard let url = URL(string: "\(base.absoluteString)/upload/\(enc)") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "PUT"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         req.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
         req.httpBody = data
         do {
             let (_, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             return (200..<300).contains(code) ? relKey : nil
         } catch { return nil }
     }
@@ -474,13 +474,13 @@ final class LibraryStore {
     func fetchVersionHistory(_ rec: Recording) async -> VersionHistory {
         guard !token.isEmpty, rec.hasArticles else { return VersionHistory(versions: [], head: 0) }
         struct Resp: Decodable { let head: Int; let versions: [ArticleVersionEntry] }
-        let enc = rec.stem.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? rec.stem
+        let enc = rec.stem.urlPathEncoded
         guard let url = URL(string: "\(base.absoluteString)/articles/\(enc)/history") else { return VersionHistory(versions: [], head: 0) }
         var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return VersionHistory(versions: [], head: 0) }
+            guard resp.isOK else { return VersionHistory(versions: [], head: 0) }
             guard let r = try? JSONDecoder().decode(Resp.self, from: data) else { return VersionHistory(versions: [], head: 0) }
             return VersionHistory(versions: r.versions, head: r.head)
         } catch { return VersionHistory(versions: [], head: 0) }
@@ -490,12 +490,12 @@ final class LibraryStore {
     /// immediately after sending so the caller can update UI without waiting.
     func patchHead(_ rec: Recording, head: Int) async {
         guard !token.isEmpty, rec.hasArticles else { return }
-        let enc = rec.stem.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? rec.stem
+        let enc = rec.stem.urlPathEncoded
         guard let url = URL(string: "\(base.absoluteString)/articles/\(enc)/head"),
               let body = try? JSONEncoder().encode(["head": head]) else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "PATCH"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
         _ = try? await URLSession.shared.data(for: req)
@@ -513,10 +513,10 @@ final class LibraryStore {
         if let cachedScope { return cachedScope }
         guard !token.isEmpty, let url = URL(string: "\(base.absoluteString)/whoami") else { return nil }
         var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            guard resp.isOK else { return nil }
             struct R: Decodable { let scope: String? }
             let s = (try? JSONDecoder().decode(R.self, from: data))?.scope
             if let s, !s.isEmpty { cachedScope = s }
@@ -528,11 +528,11 @@ final class LibraryStore {
     /// (no auth — the one photo URL shared by the community + web pages).
     func photoData(fullKey: String) async -> Data? {
         guard !fullKey.isEmpty else { return nil }
-        let enc = fullKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? fullKey
+        let enc = fullKey.urlPathEncoded
         guard let url = URL(string: "\(base.absoluteString)/photo/\(enc)") else { return nil }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            guard resp.isOK else { return nil }
             return data
         } catch { return nil }
     }

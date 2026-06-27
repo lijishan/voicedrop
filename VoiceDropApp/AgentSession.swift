@@ -63,7 +63,7 @@ final class ArticleAgentSession {
         guard let url = URL(string: "\(base)?stem=\(stem)") else { state = .error; return }
         var req = URLRequest(url: url)
         // Token rides the upgrade header, not the query string (avoids logging it).
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         let s = URLSession(configuration: .default)
         session = s
         let t = s.webSocketTask(with: req)

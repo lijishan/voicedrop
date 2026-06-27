@@ -60,10 +60,10 @@ final class SettingsStore {
         loading = true; error = nil
         defer { loading = false }
         var req = URLRequest(url: base.appending(path: "download").appending(path: "CLAUDE.md"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             if code == 404 { return }
             guard (200..<300).contains(code) else { error = "加载失败"; return }
             let parsed = Self.parse(String(decoding: data, as: UTF8.self))
@@ -74,9 +74,9 @@ final class SettingsStore {
     func articlesPageURL() async throws -> URL {
         guard !token.isEmpty else { throw ArticlesLinkError.unauthenticated }
         var req = URLRequest(url: base.appending(path: "token").appending(path: "articles"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         let (data, resp) = try await URLSession.shared.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let code = resp.httpStatusCode
         guard (200..<300).contains(code) else {
             let body = String(String(decoding: data, as: UTF8.self).prefix(80))
             throw ArticlesLinkError.http(code, body)
@@ -93,11 +93,11 @@ final class SettingsStore {
         defer { saving = false }
         var req = URLRequest(url: base.appending(path: "upload").appending(path: "CLAUDE.md"))
         req.httpMethod = "PUT"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         req.setValue("text/markdown; charset=utf-8", forHTTPHeaderField: "Content-Type")
         do {
             let (_, resp) = try await URLSession.shared.upload(for: req, from: Data(compose().utf8))
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else {
+            guard resp.isOK else {
                 error = "保存失败"; return
             }
             saved = true
@@ -114,10 +114,10 @@ final class SettingsStore {
     func loadWechat() async {
         guard !token.isEmpty else { return }
         var req = URLRequest(url: base.appending(path: "download").appending(path: "WECHAT.json"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             if code == 404 { return }
             guard (200..<300).contains(code) else { return }
             guard let cfg = try? JSONDecoder().decode(WechatConfig.self, from: data) else { return }
@@ -195,11 +195,11 @@ final class SettingsStore {
         guard let body = try? JSONEncoder().encode(cfg) else { wechatError = "编码失败"; return }
         var req = URLRequest(url: base.appending(path: "upload").appending(path: "WECHAT.json"))
         req.httpMethod = "PUT"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         do {
             let (_, resp) = try await URLSession.shared.upload(for: req, from: body)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else {
+            guard resp.isOK else {
                 wechatError = "保存失败"; return
             }
             savedWechat = true

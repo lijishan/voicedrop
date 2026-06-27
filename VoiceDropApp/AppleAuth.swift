@@ -89,7 +89,7 @@ final class AuthStore {
         var req = URLRequest(url: authURL)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(anonToken)", forHTTPHeaderField: "Authorization")
+        req.setBearer(anonToken)
         var payload: [String: Any] = ["identityToken": identityToken]
         if let fullName { payload["fullName"] = fullName }
         if let email { payload["email"] = email }
