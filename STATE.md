@@ -222,10 +222,14 @@ on their own posts.
 负责。canonical 文档 = `reco/README.md`。要点：
 - 核心 `community/list` **零改动**（仍按 firstSharedAt 倒序）。app 拿到 list 后再问 reco
   `POST /reco/rank` 要顺序；**reco 挂/超时（2s）→ app 回退时间序**，feed 照常。
-- reco 自带 D1 表 `engagement`（view/finish/like，每用户去重），算
-  `(1 + view·1+finish·4+like·3+reply·5)/(ageHours+2)^1.5` + 作者打散。
-- 互动上报：详情页进帖→view、滚到文底→finish、❤️→like（`POST /reco/engage/<shareId>`，fire-and-forget）。
-  ❤️ **不显示计数**，只反映"我赞过没"。
+- reco 自带 D1 表 `engagement`（view/finish/like/report，每用户去重），算
+  `(1 + view·1+finish·4+like·3+reply·5+report·(-9))/(ageHours+2)^1.5` + 作者打散。
+- 互动上报：详情页进帖→view、滚到文底→finish、❤️→like、举报→report（`POST /reco/engage/<shareId>`，fire-and-forget）。
+  ❤️ **不显示计数**，只反映"我赞过没"。**举报（2026-06-27）= 一次 engage 互动，负权重 `report:-9`（≈3 个负点赞）**：
+  详情页 ⋯ 菜单「举报」→ 确认弹窗 →`engage(report)`，一次性、不可撤销、每用户去重；一个举报就把冷启动帖压成负分沉底，
+  但不会让一两个举报抹掉一篇真有互动的热帖（防滥用）。权重 `W.report` 在 `reco/src/ranking.js`，可调。
+- ❤️ **本地态同步修复（2026-06-27）**：`CommunityPostView` 点 ❤️ 时除了发 engage，还同步 `store.likedShareIds`，
+  否则退出再进（`.task` 从 `likedShareIds` 重新播种 `liked`）会丢掉这次点赞，必须刷列表才回来。
 - reco **完全独立：不碰 R2、不反调核心、不共享任何 secret**（2026-06-27 改）。互动上报用 app 的
   **anon token** 鉴权（`CommunityStore` 的 engage/rank 发 `AuthStore.anonToken`）——因为 Apple
   登录的 session scope 本身就是 `users/anon-<hash>/`，anon 与 session 解析出同一个 user_sub，所以

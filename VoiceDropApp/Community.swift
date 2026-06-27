@@ -271,6 +271,7 @@ struct CommunityPostView: View {
     @State private var toast: String?
     @State private var liked = false
     @State private var finishedReported = false
+    @State private var showReportConfirm = false
 
     // Recording a response
     @State private var recorder = AudioRecorder()
@@ -333,6 +334,16 @@ struct CommunityPostView: View {
             CommunityPostView(store: store, post: orig, onRecordFinished: onRecordFinished)
         }
         .sheet(item: $sharePayload) { ShareSheet(items: [$0.text]) }
+        .confirmationDialog("举报这篇分享？", isPresented: $showReportConfirm, titleVisibility: .visible) {
+            Button("举报", role: .destructive) {
+                // 举报就是一次 engage 互动 —— 大幅降低它在社区里的排序。一次性、无法撤销。
+                Task { await store.engage(post.shareId, action: "report") }
+                showToast("已举报，感谢反馈")
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("举报会降低它在社区里的排序，且无法撤销。")
+        }
         .task {
             liked = store.likedShareIds.contains(post.shareId)
             await store.engage(post.shareId, action: "view")
@@ -356,6 +367,10 @@ struct CommunityPostView: View {
             Spacer()
             Button {
                 liked.toggle()
+                // Keep the store's liked-set in sync so re-entering this view (which seeds
+                // `liked` from `store.likedShareIds`) reflects the tap without a list refresh.
+                if liked { store.likedShareIds.insert(post.shareId) }
+                else { store.likedShareIds.remove(post.shareId) }
                 Task { await store.engage(post.shareId, action: "like", on: liked) }
             } label: {
                 Image(systemName: liked ? "heart.fill" : "heart")
@@ -371,7 +386,7 @@ struct CommunityPostView: View {
                 Button { sharePost() } label: {
                     Label("分享", systemImage: "square.and.arrow.up")
                 }
-                Button(role: .destructive) { showToast("举报功能即将上线") } label: {
+                Button(role: .destructive) { showReportConfirm = true } label: {
                     Label("举报", systemImage: "flag")
                 }
             } label: {
