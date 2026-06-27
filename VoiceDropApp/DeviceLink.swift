@@ -146,6 +146,7 @@ final class DeviceLinkStore: NSObject, URLSessionWebSocketDelegate {
 
     // Step 1: send the 6-hex prefix + ephemeral pubkey; open the wait-socket.
     func start(prefix: String) {
+        guard phase == .enterId else { return }
         let hex = prefix.trimmingCharacters(in: .whitespaces).lowercased()
         guard hex.range(of: "^[0-9a-f]{6}$", options: .regularExpression) != nil else {
             message = "请输入 6 位代码（设置→账户里那串）"; return
@@ -213,6 +214,7 @@ final class DeviceLinkStore: NSObject, URLSessionWebSocketDelegate {
                     if (err as NSError).code != URLError.cancelled.rawValue {
                         self.phase = .error
                         self.message = "连接断开，请重新发起"
+                        self.closeSocket()
                     }
                 }
             }
@@ -300,5 +302,6 @@ struct DeviceLinkView: View {
         }
         .padding(28)
         .presentationDetents([.medium])
+        .onDisappear { store.reset() }
     }
 }

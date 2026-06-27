@@ -94,6 +94,8 @@ struct LibraryView: View {
             else if p == .background { statusSession.disconnect() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .vdDidAdoptAccount)) { _ in
+            statusSession.disconnect()
+            statusSession.connect()
             Task { await refresh() }
         }
     }
