@@ -79,7 +79,12 @@ scopes every request to `users/<sub>/`.
 - `GET photo/<full R2 key>` — **public, no auth (2026-06-26).** The ONE photo endpoint used by every display surface (community, public share page, exported HTML). Serves any `users/*/photos/*.(jpg|jpeg|png)` straight from its original R2 location as a plain `<img src>` (CORS `*`, public cache). File-type allowlist + `..` block are the only guard — it can never serve articles/credentials. Full keys are unguessable (hashed sub + ts + rand). Replaced the short-lived gated `community/photo/<shareId>/<token>` design. Even the owner's own detail view (`PhotoTile`) loads through this (full key = `whoami` scope + relKey), so ALL photo display goes through this single endpoint.
 
 `functions/voicedrop/[token].js` — public, unauth. Resolves `shares/<id>` → renders
-that one article as a light-theme HTML page. **`?s=<index>`** (optional) renders/previews
+that one article as a light-theme HTML page. **It ALSO resolves a VD社区 `shareId`
+(2026-06-28):** if `shares/<id>` misses, it falls back to `community/<id>.json` (schema-2
+live pointer) → renders THAT post's `articleKey` through the SAME downstream + og tags, so a
+社区 post shares to WeChat exactly like an article (first photo + description) — **no separate
+page** (公用，不造轮子). A reported post (`community/reports/<id>.json` present) returns 404
+「已不可用」(Apple 1.2). Pinned by `og-tags.test.js`. **`?s=<index>`** (optional) renders/previews
 only that one section of a multi-section doc — the app appends it (`shareURL(_:section:)`
 from `articleIndex`) so a shared link reflects the section the user had selected; absent or
 out-of-range falls back to the full set (old links unchanged). Non-token segment (e.g. `privacy`) →
@@ -278,7 +283,10 @@ articles to a public community from the detail-view ⋯ menu (分享到 VD社区
   Pages-function fix; existing orphans vanish the next time anyone loads VD社区.
 
 App side: `Community.swift` (`CommunityStore`, read-only `CommunityPostView`). Owners get swipe-to-remove
-on their own posts.
+on their own posts. **⋯「分享」(2026-06-28)** now shares the public `/voicedrop/<shareId>?s=<i>` link via the
+SAME `ArticleShareItem` as 我的录音 (full text + first-photo `LPLinkMetadata`), so a 社区 post gets a WeChat
+link card with image + description (was plain text only, no card). Relies on `[token].js` resolving the
+community shareId (above) — **needs a Pages deploy + a new app build**.
 
 ### 推荐排序 sidecar — voicedrop-reco（2026-06-26）
 
@@ -424,7 +432,9 @@ gear → **设置** (redesign "方案二"; the old `ContentView` 3-tab `TabView`
   item). See the WeChat link-card note above.
 - **设置** `SettingsView.swift` (`SettingsStore`) — **名字** + **文风** (→ full-screen editor sheet) →
   `users/<sub>/CLAUDE.md`; **微信公众号** AppID/AppSecret (format- + live-validated before save) →
-  `WECHAT.json`; **账户** anon ID + copy ID / access token.
+  `WECHAT.json`; **账户** anon ID + copy ID / access token. **「其他」card (2026-06-28)** now holds just
+  **关于**（NavigationLink → `AboutView`）+ **版本**; the four secondary items（隐私说明 / 社区公约 / 已屏蔽用户
+  / 联系我们·内容投诉）moved one level down into `AboutView` (in `SettingsView.swift`), shown only after tapping 关于.
 
 ## Server miner — now the Worker DO (`agent/src/miner.js`)
 

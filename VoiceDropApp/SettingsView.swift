@@ -298,8 +298,6 @@ struct SettingsView: View {
     @State private var prefs = Prefs.shared
     @State private var showWechat = false
     @State private var showStyle = false
-    @State private var showPrivacy = false
-    @State private var showGuidelines = false
     @State private var showingExport = false
     @State private var exportManager = ExportManager()
 
@@ -398,27 +396,12 @@ struct SettingsView: View {
 
                     group("其他") {
                         SettingsCard {
-                            Button { showPrivacy = true } label: {
-                                SettingsRow(tileBG: Theme.tileNeutral, symbol: "hand.raised", tileFG: Theme.secondary,
-                                            title: "隐私说明") { settingsChevron }
-                            }.buttonStyle(.plain)
-                            settingsRowDivider
-                            Button { showGuidelines = true } label: {
-                                SettingsRow(tileBG: Theme.tileNeutral, symbol: "doc.text", tileFG: Theme.secondary,
-                                            title: "社区公约") { settingsChevron }
-                            }.buttonStyle(.plain)
-                            settingsRowDivider
-                            NavigationLink { BlockedUsersView() } label: {
-                                SettingsRow(tileBG: Theme.tileNeutral, symbol: "hand.raised.slash", tileFG: Theme.secondary,
-                                            title: "已屏蔽用户") { settingsChevron }
+                            NavigationLink { AboutView() } label: {
+                                SettingsRow(tileBG: Theme.tileNeutral, symbol: "info.circle", tileFG: Theme.secondary,
+                                            title: "关于") { settingsChevron }
                             }
                             settingsRowDivider
-                            Link(destination: URL(string: "mailto:\(CommunityTerms.supportEmail)?subject=VoiceDrop%20反馈与投诉")!) {
-                                SettingsRow(tileBG: Theme.tileNeutral, symbol: "envelope", tileFG: Theme.secondary,
-                                            title: "联系我们 / 内容投诉") { settingsChevron }
-                            }.buttonStyle(.plain)
-                            settingsRowDivider
-                            SettingsRow(tileBG: Theme.tileNeutral, symbol: "info.circle", tileFG: Theme.secondary,
+                            SettingsRow(tileBG: Theme.tileNeutral, symbol: "number", tileFG: Theme.secondary,
                                         title: "版本") {
                                 Text(Prefs.versionBuild).font(.system(size: 14)).foregroundStyle(Theme.faint)
                             }
@@ -438,16 +421,6 @@ struct SettingsView: View {
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.hidden)
         }
-        .alert("隐私说明", isPresented: $showPrivacy) {
-            Button("好") {}
-        } message: {
-            Text("录音只上传到你自己的云端空间；麦克风仅在录音和语音修改时使用；身份是本机生成的匿名 ID，随 iCloud 钥匙串备份。")
-        }
-        .alert("社区公约", isPresented: $showGuidelines) {
-            Button("好") {}
-        } message: {
-            Text(CommunityTerms.body)
-        }
     }
 
     @ViewBuilder private func group<C: View>(_ label: String, @ViewBuilder _ content: () -> C) -> some View {
@@ -465,6 +438,57 @@ struct SettingsView: View {
             }
         } else {
             Text("未配置").font(.system(size: 12.5)).foregroundStyle(Theme.faint)
+        }
+    }
+}
+
+// MARK: - 关于 (隐私 / 公约 / 屏蔽 / 联系) — moved out of 设置「其他」behind one entry
+
+/// The four secondary items (隐私说明 / 社区公约 / 已屏蔽用户 / 联系我们) live here, one
+/// tap into 设置「其他」→「关于」. 版本 stays on the 其他 card.
+struct AboutView: View {
+    @State private var showPrivacy = false
+    @State private var showGuidelines = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsCard {
+                    Button { showPrivacy = true } label: {
+                        SettingsRow(tileBG: Theme.tileNeutral, symbol: "hand.raised", tileFG: Theme.secondary,
+                                    title: "隐私说明") { settingsChevron }
+                    }.buttonStyle(.plain)
+                    settingsRowDivider
+                    Button { showGuidelines = true } label: {
+                        SettingsRow(tileBG: Theme.tileNeutral, symbol: "doc.text", tileFG: Theme.secondary,
+                                    title: "社区公约") { settingsChevron }
+                    }.buttonStyle(.plain)
+                    settingsRowDivider
+                    NavigationLink { BlockedUsersView() } label: {
+                        SettingsRow(tileBG: Theme.tileNeutral, symbol: "hand.raised.slash", tileFG: Theme.secondary,
+                                    title: "已屏蔽用户") { settingsChevron }
+                    }
+                    settingsRowDivider
+                    Link(destination: URL(string: "mailto:\(CommunityTerms.supportEmail)?subject=VoiceDrop%20反馈与投诉")!) {
+                        SettingsRow(tileBG: Theme.tileNeutral, symbol: "envelope", tileFG: Theme.secondary,
+                                    title: "联系我们 / 内容投诉") { settingsChevron }
+                    }.buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 40)
+        }
+        .background(Theme.appBG.ignoresSafeArea())
+        .navigationTitle("关于")
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("隐私说明", isPresented: $showPrivacy) {
+            Button("好") {}
+        } message: {
+            Text("录音只上传到你自己的云端空间；麦克风仅在录音和语音修改时使用；身份是本机生成的匿名 ID，随 iCloud 钥匙串备份。")
+        }
+        .alert("社区公约", isPresented: $showGuidelines) {
+            Button("好") {}
+        } message: {
+            Text(CommunityTerms.body)
         }
     }
 }

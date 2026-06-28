@@ -352,7 +352,7 @@ struct CommunityPostView: View {
         .navigationDestination(item: $selectedOriginal) { orig in
             CommunityPostView(store: store, post: orig, onRecordFinished: onRecordFinished)
         }
-        .sheet(item: $sharePayload) { ShareSheet(items: [$0.text]) }
+        .sheet(item: $sharePayload) { ShareSheet(items: $0.activityItems) }
         .confirmationDialog("举报这篇分享？", isPresented: $showReportConfirm, titleVisibility: .visible) {
             Button("举报并下架", role: .destructive) {
                 // 举报立即让它从社区下架（待人工审核），并从本地列表移除。
@@ -414,7 +414,7 @@ struct CommunityPostView: View {
                 Button { Task { await startResponse() } } label: {
                     Label("写回应", systemImage: "mic")
                 }
-                Button { sharePost() } label: {
+                Button { Task { await sharePost() } } label: {
                     Label("分享", systemImage: "square.and.arrow.up")
                 }
                 Button(role: .destructive) { showReportConfirm = true } label: {
@@ -638,10 +638,42 @@ struct CommunityPostView: View {
 
     // MARK: Share this post
 
-    private func sharePost() {
+    /// Share this 社区 post EXACTLY like one of your own articles: hand WeChat the
+    /// public `/voicedrop/<shareId>` link (the page resolves a community shareId too),
+    /// so it builds a rich link card — first photo + description — from the page og tags.
+    /// X / 其它 get the full text + inline link. Same `ArticleShareItem` as 我的录音.
+    private func sharePost() async {
         let title = full?.articles?.first?.title ?? post.title ?? "VoiceDrop 分享"
         let author = full?.author ?? post.author ?? "匿名"
-        sharePayload = SharePayload(text: "《\(title)》— \(author)\n来自 VoiceDrop 社区")
+        // Full text (every section, markers stripped) — matches the article-list share.
+        let arts = full?.articles ?? []
+        let allText = arts.isEmpty
+            ? "《\(title)》— \(author)\n来自 VoiceDrop 社区"
+            : arts.map { "\($0.title)\n\n\(ArticleBody.stripMarkers($0.body))" }
+                  .joined(separator: "\n\n---\n\n")
+        guard var comps = URLComponents(string: "https://jianshuo.dev/voicedrop/\(post.shareId)") else {
+            sharePayload = SharePayload(text: allText); return
+        }
+        comps.queryItems = [URLQueryItem(name: "s", value: String(articleIndex))]
+        guard let url = comps.url else { sharePayload = SharePayload(text: allText); return }
+        let image = await firstPhotoImage()                  // best-effort card thumbnail
+        sharePayload = SharePayload(text: allText + "\n\n" + url.absoluteString,
+                                    url: url, title: title, image: image)
+    }
+
+    /// First photo of the currently-shown article — the WeChat link-card thumbnail.
+    /// Best-effort: nil when there's no photo or the fetch fails (then WeChat falls back
+    /// to the page's og:image). Loads cross-user via the public `/photo/<key>` endpoint.
+    private func firstPhotoImage() async -> UIImage? {
+        guard let owner = full?.owner,
+              let body = full?.articles?[safe: articleIndex]?.body else { return nil }
+        for seg in ArticleBody.segments(body) {
+            guard case .photo(let token) = seg,
+                  let relKey = ArticleBody.resolvePhotoKey(token, photos: full?.photos ?? []) else { continue }
+            if let data = await store.photoData(fullKey: owner + relKey),
+               let img = UIImage(data: data) { return img }
+        }
+        return nil
     }
 
     // MARK: Toast
