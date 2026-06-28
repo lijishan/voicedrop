@@ -35,7 +35,17 @@ final class CommunityStore {
     var error: String?
 
     private let base = URL(string: "https://jianshuo.dev/files/api")!
+    private let recoBase = URL(string: "https://jianshuo.dev/reco")!
     private var token: String { AuthStore.shared.bearer }
+
+    /// Community WRITES (share / unshare) need an Apple-verified identity — the server
+    /// 403s a bare anon token. Send the session JWT when present; a missing one yields a
+    /// 403 the caller catches to trigger Sign in with Apple, then retries. Everything
+    /// else (incl. reco engage/rank, uploads, lists) uses `token` = the anon default.
+    private var shareToken: String { AuthStore.shared.session ?? token }
+
+    /// shareIds the current user has liked — filled by `applyRanking()`, seeds the ❤️ state.
+    var likedShareIds: Set<String> = []
 
     /// All shared posts, newest-first by first-share time.
     func load() async {
@@ -43,13 +53,45 @@ final class CommunityStore {
         loading = true; error = nil
         defer { loading = false }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "list"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { error = "加载失败"; return }
+            guard resp.isOK else { error = "加载失败"; return }
             struct R: Decodable { let posts: [CommunityPost] }
             posts = try JSONDecoder().decode(R.self, from: data).posts
+            await applyRanking()
         } catch { self.error = error.localizedDescription }
+    }
+
+    /// Ask reco how to order the feed; on success reorder `posts` and record what I liked.
+    /// On failure/timeout keep the time-sort — the feed always shows.
+    private func applyRanking() async {
+        guard !posts.isEmpty, !token.isEmpty else { return }
+        let replyCounts = posts.reduce(into: [String: Int]()) { acc, p in
+            if let to = p.replyTo { acc[to, default: 0] += 1 }
+        }
+        let payload = posts.map { p -> [String: Any] in
+            ["shareId": p.shareId,
+             "firstSharedAt": p.firstSharedAt ?? 0,
+             "author": p.author ?? "",
+             "replyCount": replyCounts[p.shareId] ?? 0]
+        }
+        var req = URLRequest(url: recoBase.appending(path: "rank"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 2   // timeout → fall back to time-sort
+        req.setBearer(token)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["posts": payload])
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard resp.isOK else { return }
+            struct R: Decodable { let order: [String]; let liked: [String] }
+            let r = try JSONDecoder().decode(R.self, from: data)
+            likedShareIds = Set(r.liked)
+            let byId = Dictionary(uniqueKeysWithValues: posts.map { ($0.shareId, $0) })
+            let reordered = r.order.compactMap { byId[$0] }
+            if reordered.count == posts.count { posts = reordered }  // replace only on full coverage
+        } catch { /* fall back: keep time-sort */ }
     }
 
     /// Share (or re-share) one of the user's articles. Returns shareId on success, nil on failure.
@@ -70,10 +112,10 @@ final class CommunityStore {
     func sharedShareId(_ rec: Recording) async -> String? {
         guard !token.isEmpty, rec.hasArticles else { return nil }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "shared").appending(path: rec.articleKey))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            guard resp.isOK else { return nil }
             struct R: Decodable { let shared: Bool; let shareId: String? }
             let r = try? JSONDecoder().decode(R.self, from: data)
             return r?.shared == true ? r?.shareId : nil
@@ -85,14 +127,14 @@ final class CommunityStore {
     private func postShare(_ rec: Recording, replyTo: String?) async -> String? {
         var req = URLRequest(url: base.appending(path: "community").appending(path: "share").appending(path: rec.articleKey))
         req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(shareToken)
         if let replyTo {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try? JSONEncoder().encode(["replyTo": replyTo])
         }
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             if (200..<300).contains(code) {
                 needsAppleSignIn = false
                 struct R: Decodable { let shareId: String? }
@@ -121,10 +163,10 @@ final class CommunityStore {
     private func postUnshare(_ shareId: String) async -> Bool {
         var req = URLRequest(url: base.appending(path: "community").appending(path: "unshare").appending(path: shareId))
         req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(shareToken)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             if (200..<300).contains(code) { needsAppleSignIn = false; return true }
             needsAppleSignIn = (code == 403) &&
                 ((try? JSONDecoder().decode([String: String].self, from: data))?["error"] == "needs_apple_signin")
@@ -135,10 +177,10 @@ final class CommunityStore {
     func isShared(_ rec: Recording) async -> Bool {
         guard !token.isEmpty, rec.hasArticles else { return false }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "shared").appending(path: rec.articleKey))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return false }
+            guard resp.isOK else { return false }
             struct R: Decodable { let shared: Bool }
             return (try? JSONDecoder().decode(R.self, from: data))?.shared ?? false
         } catch { return false }
@@ -147,10 +189,10 @@ final class CommunityStore {
     func fetchPost(_ shareId: String) async -> CommunityFullPost? {
         guard !token.isEmpty else { return nil }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "get").appending(path: shareId))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            guard resp.isOK else { return nil }
             return try JSONDecoder().decode(CommunityFullPost.self, from: data)
         } catch { return nil }
     }
@@ -160,23 +202,38 @@ final class CommunityStore {
     /// logic everywhere: read straight from the photo's original location.
     func photoData(fullKey: String) async -> Data? {
         guard !fullKey.isEmpty else { return nil }
-        let enc = fullKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? fullKey
+        let enc = fullKey.urlPathEncoded
         guard let url = URL(string: "\(base.absoluteString)/photo/\(enc)") else { return nil }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return nil }
+            guard resp.isOK else { return nil }
             return data
         } catch { return nil }
+    }
+
+    /// Report one engagement. Failures are silently ignored — when reco is down the
+    /// core experience is unaffected.
+    func engage(_ shareId: String, action: String, on: Bool? = nil) async {
+        guard !token.isEmpty else { return }
+        var req = URLRequest(url: recoBase.appending(path: "engage").appending(path: shareId))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 3
+        req.setBearer(token)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["action": action]
+        if let on { body["on"] = on }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await URLSession.shared.data(for: req)
     }
 
     /// Posts that are responses to `shareId`, oldest-first.
     func loadReplies(_ shareId: String) async -> [CommunityPost] {
         guard !token.isEmpty else { return [] }
         var req = URLRequest(url: base.appending(path: "community").appending(path: "replies").appending(path: shareId))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else { return [] }
+            guard resp.isOK else { return [] }
             struct R: Decodable { let posts: [CommunityPost] }
             return (try? JSONDecoder().decode(R.self, from: data))?.posts ?? []
         } catch { return [] }
@@ -212,6 +269,9 @@ struct CommunityPostView: View {
     @State private var selectedOriginal: CommunityPost?  // navigate to original post
     @State private var sharePayload: SharePayload?
     @State private var toast: String?
+    @State private var liked = false
+    @State private var finishedReported = false
+    @State private var showReportConfirm = false
 
     // Recording a response
     @State private var recorder = AudioRecorder()
@@ -250,6 +310,12 @@ struct CommunityPostView: View {
                             communityBody(a).padding(.top, articles.count > 1 ? 16 : 20)
                         }
                         repliesSection
+                        Color.clear.frame(height: 1)
+                            .onAppear {
+                                guard !finishedReported else { return }
+                                finishedReported = true
+                                Task { await store.engage(post.shareId, action: "finish") }
+                            }
                     }
                     .padding(.horizontal, 20)
                 }
@@ -268,7 +334,19 @@ struct CommunityPostView: View {
             CommunityPostView(store: store, post: orig, onRecordFinished: onRecordFinished)
         }
         .sheet(item: $sharePayload) { ShareSheet(items: [$0.text]) }
+        .confirmationDialog("举报这篇分享？", isPresented: $showReportConfirm, titleVisibility: .visible) {
+            Button("举报", role: .destructive) {
+                // 举报就是一次 engage 互动 —— 大幅降低它在社区里的排序。一次性、无法撤销。
+                Task { await store.engage(post.shareId, action: "report") }
+                showToast("已举报，感谢反馈")
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("举报会降低它在社区里的排序，且无法撤销。")
+        }
         .task {
+            liked = store.likedShareIds.contains(post.shareId)
+            await store.engage(post.shareId, action: "view")
             full = await store.fetchPost(post.shareId)
             loading = false
             async let repliesTask = store.loadReplies(post.shareId)
@@ -287,6 +365,20 @@ struct CommunityPostView: View {
             NavSquare(systemName: "chevron.left", stroke: Theme.inkRead, border: Theme.borderRead) { dismiss() }
                 .accessibilityLabel("返回")
             Spacer()
+            Button {
+                liked.toggle()
+                // Keep the store's liked-set in sync so re-entering this view (which seeds
+                // `liked` from `store.likedShareIds`) reflects the tap without a list refresh.
+                if liked { store.likedShareIds.insert(post.shareId) }
+                else { store.likedShareIds.remove(post.shareId) }
+                Task { await store.engage(post.shareId, action: "like", on: liked) }
+            } label: {
+                Image(systemName: liked ? "heart.fill" : "heart")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(liked ? Theme.accent : Theme.inkRead)
+                    .frame(width: 38, height: 38)
+            }
+            .accessibilityLabel(liked ? "取消赞" : "赞")
             Menu {
                 Button { Task { await startResponse() } } label: {
                     Label("写回应", systemImage: "mic")
@@ -294,7 +386,7 @@ struct CommunityPostView: View {
                 Button { sharePost() } label: {
                     Label("分享", systemImage: "square.and.arrow.up")
                 }
-                Button(role: .destructive) { showToast("举报功能即将上线") } label: {
+                Button(role: .destructive) { showReportConfirm = true } label: {
                     Label("举报", systemImage: "flag")
                 }
             } label: {

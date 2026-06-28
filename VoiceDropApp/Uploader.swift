@@ -83,7 +83,7 @@ final class Uploader {
             .appending(path: url.lastPathComponent)
         var req = URLRequest(url: endpoint)
         req.httpMethod = "PUT"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         req.setValue("audio/mp4", forHTTPHeaderField: "Content-Type")
 
         do {

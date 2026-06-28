@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// Maintains a persistent WebSocket to wss://jianshuo.dev/agent/status and
-/// delivers real-time mining status updates to the app. mine.py pushes a
+/// delivers real-time mining status updates to the app. The Worker miner pushes a
 /// notification at each phase of a recording, so the UI can flip between
 /// 待处理 / 听录音 / 挖文章 / 已成文 / 无语音 without polling.
 @MainActor
@@ -10,6 +10,8 @@ import Observation
 final class StatusSession {
     var onPhase: ((String, String) -> Void)?   // (stem, phase) — phase ∈ {asr, mining}
     var onDone: ((String) -> Void)?            // stem that finished (ready or empty)
+    var onLinkRequest: ((String, String, String) -> Void)?  // (pairingId, code, pubkey)
+    var onLinkRelease: ((String) -> Void)?                  // pairingId
 
     private var task: URLSessionWebSocketTask?
     private var urlSession: URLSession?
@@ -27,7 +29,7 @@ final class StatusSession {
         let token = AuthStore.shared.bearer
         guard !token.isEmpty, let url = URL(string: base) else { return }
         var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         let s = URLSession(configuration: .default)
         urlSession = s
         let t = s.webSocketTask(with: req)
@@ -58,7 +60,21 @@ final class StatusSession {
     private func handle(_ str: String) {
         guard let data = str.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              (obj["type"] as? String) == "status_update",
+              let type = obj["type"] as? String else { return }
+
+        if type == "link_request" {
+            guard let pid = obj["pairingId"] as? String,
+                  let code = obj["code"] as? String,
+                  let pubkey = obj["pubkey"] as? String else { return }
+            onLinkRequest?(pid, code, pubkey)
+            return
+        }
+        if type == "link_release" {
+            if let pid = obj["pairingId"] as? String { onLinkRelease?(pid) }
+            return
+        }
+
+        guard type == "status_update",
               let stem = obj["stem"] as? String,
               let status = obj["status"] as? String else { return }
         switch status {

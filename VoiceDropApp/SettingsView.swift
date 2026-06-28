@@ -60,10 +60,10 @@ final class SettingsStore {
         loading = true; error = nil
         defer { loading = false }
         var req = URLRequest(url: base.appending(path: "download").appending(path: "CLAUDE.md"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             if code == 404 { return }
             guard (200..<300).contains(code) else { error = "加载失败"; return }
             let parsed = Self.parse(String(decoding: data, as: UTF8.self))
@@ -74,9 +74,9 @@ final class SettingsStore {
     func articlesPageURL() async throws -> URL {
         guard !token.isEmpty else { throw ArticlesLinkError.unauthenticated }
         var req = URLRequest(url: base.appending(path: "token").appending(path: "articles"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         let (data, resp) = try await URLSession.shared.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let code = resp.httpStatusCode
         guard (200..<300).contains(code) else {
             let body = String(String(decoding: data, as: UTF8.self).prefix(80))
             throw ArticlesLinkError.http(code, body)
@@ -93,11 +93,11 @@ final class SettingsStore {
         defer { saving = false }
         var req = URLRequest(url: base.appending(path: "upload").appending(path: "CLAUDE.md"))
         req.httpMethod = "PUT"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         req.setValue("text/markdown; charset=utf-8", forHTTPHeaderField: "Content-Type")
         do {
             let (_, resp) = try await URLSession.shared.upload(for: req, from: Data(compose().utf8))
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else {
+            guard resp.isOK else {
                 error = "保存失败"; return
             }
             saved = true
@@ -114,10 +114,10 @@ final class SettingsStore {
     func loadWechat() async {
         guard !token.isEmpty else { return }
         var req = URLRequest(url: base.appending(path: "download").appending(path: "WECHAT.json"))
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let code = resp.httpStatusCode
             if code == 404 { return }
             guard (200..<300).contains(code) else { return }
             guard let cfg = try? JSONDecoder().decode(WechatConfig.self, from: data) else { return }
@@ -126,6 +126,35 @@ final class SettingsStore {
             wechatEnabled = cfg.enabled ?? true
             wechatThumbMediaId = cfg.thumb_media_id ?? ""
         } catch {}
+    }
+
+    var autoShareCommunity = false
+
+    private struct AppConfig: Codable { var autoShareCommunity: Bool? }
+
+    func loadConfig() async {
+        guard !token.isEmpty else { return }
+        var req = URLRequest(url: base.appending(path: "download").appending(path: "CONFIG.json"))
+        req.setBearer(token)
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let code = resp.httpStatusCode
+            if code == 404 { return }
+            guard (200..<300).contains(code) else { return }
+            guard let cfg = try? JSONDecoder().decode(AppConfig.self, from: data) else { return }
+            autoShareCommunity = cfg.autoShareCommunity ?? false
+        } catch {}
+    }
+
+    func saveConfig() async {
+        guard !token.isEmpty else { return }
+        let cfg = AppConfig(autoShareCommunity: autoShareCommunity)
+        guard let body = try? JSONEncoder().encode(cfg) else { return }
+        var req = URLRequest(url: base.appending(path: "upload").appending(path: "CONFIG.json"))
+        req.httpMethod = "PUT"
+        req.setBearer(token)
+        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        do { _ = try await URLSession.shared.upload(for: req, from: body) } catch {}
     }
 
     /// Validate the WeChat credentials before saving. WeChat checks
@@ -195,11 +224,11 @@ final class SettingsStore {
         guard let body = try? JSONEncoder().encode(cfg) else { wechatError = "编码失败"; return }
         var req = URLRequest(url: base.appending(path: "upload").appending(path: "WECHAT.json"))
         req.httpMethod = "PUT"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setBearer(token)
         req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         do {
             let (_, resp) = try await URLSession.shared.upload(for: req, from: body)
-            guard (resp as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else {
+            guard resp.isOK else {
                 wechatError = "保存失败"; return
             }
             savedWechat = true
@@ -276,7 +305,32 @@ struct SettingsView: View {
     private var shortTag: String {
         let id = AuthStore.shared.anonId          // "anon-7f3a…"
         let hex = id.hasPrefix("anon-") ? String(id.dropFirst(5)) : id
-        return "VD·" + hex.prefix(4).uppercased()
+        return hex.prefix(6).uppercased()
+    }
+
+    private var autoShareBinding: Binding<Bool> {
+        Binding(
+            get: { store.autoShareCommunity },
+            set: { newValue in
+                if newValue {
+                    if AuthStore.shared.isAuthenticated {
+                        store.autoShareCommunity = true
+                        Task { await store.saveConfig() }
+                    } else {
+                        Task {
+                            await AuthStore.shared.signInWithApple()
+                            if AuthStore.shared.isAuthenticated {
+                                store.autoShareCommunity = true
+                                await store.saveConfig()
+                            }
+                        }
+                    }
+                } else {
+                    store.autoShareCommunity = false
+                    Task { await store.saveConfig() }
+                }
+            }
+        )
     }
 
     var body: some View {
@@ -312,6 +366,11 @@ struct SettingsView: View {
                                     HStack(spacing: 8) { wechatBadge; settingsChevron }
                                 }
                             }.buttonStyle(.plain)
+                            settingsRowDivider
+                            SettingsRow(tileBG: Theme.okBannerBG, symbol: "person.2.fill", tileFG: Theme.greenDone,
+                                        title: "自动分享到 VD社区", subtitle: "挖出新文章后自动发到社区") {
+                                Toggle("", isOn: autoShareBinding).labelsHidden().tint(Theme.accent)
+                            }
                             settingsRowDivider
                             Button { showStyle = true } label: {
                                 SettingsRow(tileBG: Theme.tileNeutral, symbol: "pencil", tileFG: Theme.secondary,
@@ -355,7 +414,7 @@ struct SettingsView: View {
         }
         .background(Theme.appBG.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .task { await store.load(); await store.loadWechat() }
+        .task { await store.load(); await store.loadWechat(); await store.loadConfig() }
         .sheet(isPresented: $showWechat) { WechatSettingsSheet(store: store) }
         .sheet(isPresented: $showStyle) { WritingStyleSheet(store: store) }
         .sheet(isPresented: $showingExport, onDismiss: { exportManager.reset() }) {

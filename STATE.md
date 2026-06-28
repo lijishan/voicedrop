@@ -13,7 +13,7 @@ public web preview of any article.
 
 | Repo | Path | What | Deploy |
 |---|---|---|---|
-| voicedrop | `~/code/voicedrop` | iOS app (SwiftUI) + server miner (`mining/mine.py`) + CI | push `main` → GitHub Actions `Build & Deploy` → **TestFlight** (fastlane). App Store submit = manual `appstore` workflow_dispatch → `fastlane release skip_build:true`. |
+| voicedrop | `~/code/voicedrop` | iOS app (SwiftUI) + WeChat publish relay (`mining/relay_server.py`) + CI | push `main` → GitHub Actions `Build & Deploy` → **TestFlight** (fastlane). App Store submit = manual `appstore` workflow_dispatch → `fastlane release skip_build:true`. |
 | jianshuo.dev | `~/code/jianshuo.dev` | Cloudflare **Pages** project `jianshuo-dev`: files API + public article page, backed by R2 bucket `jianshuo-dev-files` (binding `FILES`) | **manual** `npx wrangler pages deploy . --project-name jianshuo-dev` (not git-triggered) |
 | voicedrop-agent | `~/code/jianshuo.dev/agent` | Cloudflare **Worker** (Durable Objects; Pages can't host them) on route `jianshuo.dev/agent/*`: live article editing + real-time status. Same R2 `FILES` + `SESSION_SECRET` as Pages. | **manual** `cd ~/code/jianshuo.dev/agent && npx wrangler deploy` |
 | claude-skills | `~/code/claude-skills/wjs-mining-voicedrop` | the Mac-side mining skill (WeChat drafts) | commit on `main`; publish hook syncs `wjs-*` to public repo |
@@ -41,8 +41,13 @@ public web  jianshuo.dev/voicedrop/<token> ──> renders one article set (ligh
 ⚠️ **CF same-zone fetch gotcha (2026-06-25):** Pages Functions cannot `fetch('https://jianshuo.dev/agent/...')` to call the Worker zone route — CF routes same-zone internal fetches through Pages routing first, which returns 405 for POST on static paths (Worker never sees the request). **Fix**: `dispatchMine` uses `https://voicedrop-agent.jianshuo.workers.dev/agent/mine/trigger` (the Worker's `workers_dev` subdomain), bypassing Pages routing entirely. `wrangler.jsonc` must have `"workers_dev": true`.
 
 Auth: per-user. App holds an anonymous capability token (`anon_…`, iCloud
-Keychain) OR a Sign-in-with-Apple session JWT. Server admin token = `FILES_TOKEN`
-(sees all `users/*`). Files API scopes every request to `users/<sub>/`.
+Keychain) OR a Sign-in-with-Apple session JWT. **The app sends the anon token by
+default for ALL calls (`AuthStore.bearer = anonToken`, 2026-06-27); the session JWT is
+sent ONLY for the two server-gated community WRITES — share / unshare — which 403 a
+non-Apple token. Apple sign-in just BINDS the Apple ID to the existing anon box, so the
+session's scope is itself `users/anon-<hash>/` — anon and session resolve to the SAME
+scope/user_sub.** Server admin token = `FILES_TOKEN` (sees all `users/*`). Files API
+scopes every request to `users/<sub>/`.
 
 ## R2 layout & marker conventions (the contract everyone shares)
 
@@ -57,7 +62,7 @@ Keychain) OR a Sign-in-with-Apple session JWT. Server admin token = `FILES_TOKEN
 - `shares/<id>` — value is a full article key; backs the short public share link. `id = HMAC(key)[:10]`.
 - `community/<shareId>.json` — a public **schema-2 live pointer** to a shared article: `{schema:2,shareId,owner,articleKey,author,firstSharedAt,replyTo?}` (no content copy — title/body read live from `articleKey`). `shareId = HMAC('community:'+articleKey)[:12]`. Global (cross-user). Editing the source article IS reflected immediately; deleting the source recording **reaps** this pointer (see Community self-heal below). Legacy schema-1 posts with inline `{title,articles}` may still exist and are read as-is.
 - **"processed" = `.json` OR `.empty` exists.** Audio is NEVER auto-deleted; only the user deletes it in-app.
-- `llmlogs/<YYYY-MM-DD>/<epochms>-<rand6>.json` — **every** Anthropic call (mine.py + agent worker) recorded raw `{id,ts,source:mine|agent,user_scope,model,latency_ms,http_status,ok,turn_id,step,request,response|error,meta}`. Admin-only (outside `users/`). 30-day R2 lifecycle (`llmlogs-30d`). Viewer: `voicedrop/admin/llm.html` (reads via admin `GET /files/api/llmlog/{dates,list?date=}` + `download/<key>`). Best-effort write — never blocks mining/editing.
+- `llmlogs/<YYYY-MM-DD>/<epochms>-<rand6>.json` — **every** Anthropic call (Worker miner + agent worker) recorded raw `{id,ts,source:mine|agent,user_scope,model,latency_ms,http_status,ok,turn_id,step,request,response|error,meta}`. Admin-only (outside `users/`). 30-day R2 lifecycle (`llmlogs-30d`). Viewer: `voicedrop/admin/llm.html` (reads via admin `GET /files/api/llmlog/{dates,list?date=}` + `download/<key>`). Best-effort write — never blocks mining/editing.
 - `minelogs/<YYYY-MM-DD>/<epochms>-<stem>.json` — **每次 Miner DO 处理**一条录音的事件日志 `{ts,stem,audioKey,result:"mined|empty|error",elapsed_ms,events:[{ts,msg,data}]}`. Admin-only. Viewer: `voicedrop/admin/mine.html`. Best-effort —`result:"skip"`（已处理跳过）时不写。
 
 
@@ -79,10 +84,19 @@ only that one section of a multi-section doc — the app appends it (`shareURL(_
 from `articleIndex`) so a shared link reflects the section the user had selected; absent or
 out-of-range falls back to the full set (old links unchanged). Non-token segment (e.g. `privacy`) →
 `context.next()` (static `/voicedrop/` landing + `/voicedrop/privacy/` untouched).
-Article pages emit **OG + Twitter Card** tags (`og:title`=article title,
-`og:description`=excerpt, `twitter:card=summary_large_image`, `og:image`=static
-**`/voicedrop/og.png`** branded banner 1200×630) so a shared link renders a large
-clickable card on X / WeChat. og.png is a static asset in the Pages repo.
+Article pages emit **share-card meta tags** for X / WeChat (`metaTags()` in `[token].js`,
+unit-pinned by `agent/test/og-tags.test.js`) — **all section-aware** (driven by `?s=<i>`):
+- `og:title` **and `<title>`** = the SELECTED section's title (so s=1/s=2 cards show that
+  section's title, not section 0's).
+- `og:description` **and `<meta name="description">`** = a plain-text excerpt of THAT
+  section's body (markers stripped). **WeChat's link-card crawler reads `<meta name=description>`,
+  NOT `og:description`** — that's why both are emitted.
+- `og:image` (+ `twitter:image` + `<link rel=image_src>`, card upgraded to
+  `summary_large_image`) = **that section's OWN first `[[photo:…]]`** as an ABSOLUTE URL
+  (`https://jianshuo.dev/files/api/photo/<full key>`, the public no-auth photo endpoint).
+  **Each article carries its own image — no recycled static banner** (the old `/voicedrop/og.png`
+  banner was dropped: one image on every share read as spam). A photo-less section emits **no
+  `og:image`** and stays a clean text card (`twitter:card=summary`).
 
 Pages secrets: `FILES_TOKEN`, `SESSION_SECRET`, `GH_DISPATCH_TOKEN`, `WECHAT_RELAY_URL`, `WECHAT_RELAY_SECRET`.
 
@@ -102,23 +116,44 @@ Idempotent: an existing draft is updated in place (no dupe).
 runs ON that VPS and calls `api.weixin.qq.com` directly.
 
 - **Relay** = `wechat-relay` systemd unit on the VPS: `python3.12 /opt/wechat-relay/relay_server.py`
-  bound to `127.0.0.1:8848`, reusing `mining/mine.py` (**needs Python 3.12** — backslash-in-fstring).
-  **Dumb**: no R2 / `FILES_TOKEN`; gets appid/secret + article per request, returns results; the
-  Function persists. Code = `mining/relay_server.py` + `mining/mine.py`. Deploy = `mining/deploy_relay.sh`
-  (`VPS_SSH=root@66.42.45.128 ./mining/deploy_relay.sh` → rsync + restart). First-time provision =
-  `mining/vps/provision.sh` (+ `wechat-relay.service`, `README.md`).
+  bound to `127.0.0.1:8848`. **Self-contained, stdlib-only** — `relay_server.py` holds the entire
+  WeChat + cover toolchain (`wechat_access_token` / `md_to_wechat_html` / the `assets/wechat-covers`
+  picker / `create|update|sync_wechat_drafts`); no R2 / `FILES_TOKEN`, no ASR, no Claude. **Dumb**:
+  gets appid/secret + article per request, returns results; the Function persists. Code =
+  `mining/relay_server.py` (single file). Deploy = `mining/deploy_relay.sh`
+  (`VPS_SSH=root@66.42.45.128 ./mining/deploy_relay.sh` → rsync + drop stale `mine.py` + daemon-reload +
+  restart + health). First-time provision = `mining/vps/provision.sh` (+ `wechat-relay.service`, `README.md`).
 - **Exposed via a Cloudflare Tunnel** (zero open inbound port): `cloudflared` systemd unit, tunnel
   `wechat-pub` → proxied CNAME `wechat-pub.jianshuo.dev` → `127.0.0.1:8848`. Inbound auth = header
   `X-Relay-Secret` (= Pages `WECHAT_RELAY_SECRET` = VPS `/opt/wechat-relay/relay.env`). WeChat egress
   still exits `66.42.45.128`, so the whitelist is unaffected. **No fallback** by design — failures surface.
-- The old `publish-wechat.yml` GitHub Action is **orphaned for the app path** (the Function no longer
-  dispatches it); still used by the `mine.yml` auto-push path.
+- `mining/mine.py`, `mining/publish_wechat.py`, and `.github/workflows/publish-wechat.yml` were all
+  **deleted (2026-06-26)**. `mine.py`'s mining half was long superseded by the Worker miner
+  (`agent/src/miner.js`, "port of mine.py to JS"); its WeChat half was the relay's only live use, now
+  inlined into `relay_server.py`. The publish-wechat workflow path was superseded by this synchronous
+  relay. See `mining/REMOVED.md` for the tombstone + git-restore commands. **Nothing runs `python mine.py`
+  anymore** — there is no `mine.yml`, and `POST /files/api/mine` dispatches the Worker DO, not a workflow.
 
-**Per-article covers:** `mine.resolve_cover_thumb(token, doc_id, wechat_cfg)` picks one of
-`assets/wechat-covers/style01–10.png` by `hash(doc.id)`, uploads it to WeChat once, and caches the
-material id per cover name in `WECHAT.json.coverMediaIds` (reused across docs sharing a cover). Used by
-**both** the relay (on-demand) and the CI miner auto-push (mine.py:~660). Gray placeholder = fallback
-when the cover set is empty/unreachable.
+**Per-article covers:** `resolve_cover_thumb(token, doc_id, wechat_cfg)` (in `relay_server.py`) picks one
+of `assets/wechat-covers/style01–10.png` by `hash(doc.id)`, uploads it to WeChat once, and caches the
+material id per cover name in `WECHAT.json.coverMediaIds` (reused across docs sharing a cover); the
+Function passes the cache in and persists what the relay returns. Gray placeholder = fallback when the
+cover set is empty/unreachable.
+
+**Inline body photos in WeChat drafts (2026-06-26):** the body's `[[photo:<relkey>]]` markers used to be
+**stripped** from WeChat drafts (the markers never carried the actual image). Now the relay embeds them:
+the Function passes `owner` (= `users/<sub>/`) in the publish payload; `relay_server.py` `make_photo_resolver`
+fetches each photo from the public `GET /files/api/photo/<owner+relkey>` endpoint (no auth) and uploads it
+via WeChat `media/uploadimg` (content-image API — no material-quota cost), then `md_to_wechat_html` replaces
+the marker line with a centered `<img>`. **A photo failure never breaks the publish** — that one marker is
+stripped and publishing continues. Legacy numeric `[[photo:N]]` and mid-paragraph markers don't resolve and
+are stripped (as before). Requires the relay + the Pages Function both deployed (done 2026-06-26).
+  - **Uploaded-URL cache (disposable, NOT in the article JSON):** a global map `appid+fullkey → {url,ts}` in
+    a local scratch file on the relay box (`/opt/wechat-relay/imgcache.json`, `WECHAT_IMG_CACHE`-overridable),
+    so re-publishing / voice-editing doesn't re-upload every photo each time. Entries >30 days old are treated
+    as misses and re-uploaded; each write prunes expired ones (never grows unbounded). Per-appid scoped (a URL
+    is only reused for the same WeChat account). Only successful uploads are cached. Losing the file = a
+    one-time re-upload. The relay stays "dumb" (no R2 / no article-JSON writes) — this is pure scratch.
 
 Infra (tunnel + DNS + VPS service) recorded in the iCloud `IT基础设施-更改记录.html` (2026-06-23).
 
@@ -144,7 +179,7 @@ app's existing tokens) + `CLAUDE_API_KEY`. Two Durable Objects (`agent/src/index
   and queued instructions stack above it (`RecordingDetailView.swift`).
 - **`Miner`** (singleton DO `idFromName("miner")`) — serialised mine runs via `alarm()`. Triggered by `POST /agent/mine/trigger` (any valid token) or the 6-hour cron (`scheduled` handler). Lists all users' unprocessed audio, runs Volcano ASR + Claude mining, writes `articles/<stem>.json` or `.empty`, writes `minelogs/`. POSTs `POST /agent/notify` with `FILES_TOKEN` after each recording to update `StatusHub`. Source: `agent/src/miner.js`.
 - **`StatusHub`** (`wss://…/agent/status`, one instance per user `status:<scope>`) — real-time mining
-  status. `mine.py` POSTs `POST /agent/notify` (auth `FILES_TOKEN`) at each mining phase; the hub
+  status. The Worker miner (`miner.js`) POSTs `POST /agent/notify` (auth `FILES_TOKEN`) at each mining phase; the hub
   broadcasts `{type:"status_update",stem,status}` (status ∈ `asr|mining|ready|empty`, passed through
   verbatim — no whitelist) to that user's app sockets, so rows flip **待处理 → 听录音 → 挖文章 → 已成文**
   (or → 无语音) with no polling (`StatusSession.swift` `onPhase/onDone`, `LibraryStore.markPhase/markDone`).
@@ -189,6 +224,60 @@ articles to a public community from the detail-view ⋯ menu (分享到 VD社区
 
 App side: `Community.swift` (`CommunityStore`, read-only `CommunityPostView`). Owners get swipe-to-remove
 on their own posts.
+
+### 推荐排序 sidecar — voicedrop-reco（2026-06-26）
+
+社区 feed 的排序由一个**独立、可随时拔掉**的 Worker `voicedrop-reco`（`~/code/jianshuo.dev/reco/`）
+负责。canonical 文档 = `reco/README.md`。要点：
+- 核心 `community/list` **零改动**（仍按 firstSharedAt 倒序）。app 拿到 list 后再问 reco
+  `POST /reco/rank` 要顺序；**reco 挂/超时（2s）→ app 回退时间序**，feed 照常。
+- reco 自带 D1 表 `engagement`（view/finish/like/report，每用户去重），算
+  `(1 + view·1+finish·4+like·3+reply·5+report·(-9))/(ageHours+2)^1.5` + 作者打散。
+- 互动上报：详情页进帖→view、滚到文底→finish、❤️→like、举报→report（`POST /reco/engage/<shareId>`，fire-and-forget）。
+  ❤️ **不显示计数**，只反映"我赞过没"。**举报（2026-06-27）= 一次 engage 互动，负权重 `report:-9`（≈3 个负点赞）**：
+  详情页 ⋯ 菜单「举报」→ 确认弹窗 →`engage(report)`，一次性、不可撤销、每用户去重；一个举报就把冷启动帖压成负分沉底，
+  但不会让一两个举报抹掉一篇真有互动的热帖（防滥用）。权重 `W.report` 在 `reco/src/ranking.js`，可调。
+- ❤️ **本地态同步修复（2026-06-27）**：`CommunityPostView` 点 ❤️ 时除了发 engage，还同步 `store.likedShareIds`，
+  否则退出再进（`.task` 从 `likedShareIds` 重新播种 `liked`）会丢掉这次点赞，必须刷列表才回来。
+- reco **完全独立：不碰 R2、不反调核心、不共享任何 secret**（2026-06-27 改）。互动上报用 app 的
+  **anon token** 鉴权（`CommunityStore` 的 engage/rank 发 `AuthStore.anonToken`）——因为 Apple
+  登录的 session scope 本身就是 `users/anon-<hash>/`，anon 与 session 解析出同一个 user_sub，所以
+  reco **无需 SESSION_SECRET** 也能正确识别所有用户（含 Apple 登录者）。**reco 上当前未设、也不需要
+  SESSION_SECRET**（auth.js 仍保留验 JWT 的死代码，无害）。部署独立：
+  `cd ~/code/jianshuo.dev/reco && npx wrangler deploy`。
+- **token 计费已做（2026-06-28）**：见下面「## 算力计费」。独立 D1 库 `voicedrop-usage`，绑在 **agent worker**（不进 engagement、不进 reco）。
+
+## 算力计费 (usage billing)（2026-06-28 上线）
+
+给每个用户一个**赠送的「算力」额度**，按真实成本扣，扣到 0 停。**算力 = 钱穿了件马甲：23 算力 = ¥1**（锚定钉死）。
+单位**无现金价值、不可提现、不可退款**（绕开记账/退款法务风险）；将来真要「充值收钱」是另一个项目（带支付+法务），本期不做。
+Spec/计划：`docs/superpowers/specs/2026-06-27-voicedrop-usage-billing-design.md` + `docs/superpowers/plans/2026-06-27-voicedrop-usage-billing.md`。
+
+- **落点 = agent worker（不另起 worker）**：计费必须和花钱的地方紧耦合，所有 ASR+Claude 调用都在 `voicedrop-agent`。
+  新 D1 `voicedrop-usage`（binding `USAGE`，id `317b7cd5-e926-49f0-a6c9-497e4740aea8`），`agent/migrations/0001_usage.sql`。
+- **计价单一真源 `agent/src/usage.js`**：`FX=7.3` `RATE=23`；`PRICE`（sonnet $3/$15、haiku $1/$5 每 Mtok）；ASR `¥0.8/小时`。
+  钱一律 **微元（1e-6 元）整数**存，`Math.ceil` 算（只多收不少收，绝不亏）；未知模型成本 0。显示用 `uyToSuanli`/`uyToYuan`。
+  手感：典型录音挖一篇 ≈ 2 算力，haiku 改一刀 ≈ 1.4、sonnet ≈ 4；新用户一次性送 **500 算力**。
+- **D1 两表 `agent/src/usage_store.js`**：`account`(user_sub PK, balance_uy/granted_uy/spent_uy 微元) + `ledger`(只追加流水, kind=grant|spend, reason, detail JSON, balance_uy 快照)。
+  `ensureAccount` 懒建 + 首次送 500（`INSERT OR IGNORE` 防并发首触竞态，只有真创建者落 signup 行）；`debit`/`grant` 用 `db.batch()` 原子化；
+  `editCount` = `COUNT(DISTINCT json_extract(detail,'$.turn_id'))`（数**真实编辑次数**，不是 Claude 调用次数——一次编辑是 agentic 循环含多次调用）。
+- **挖文章计费（`agent/src/miner.js`）**：`meteredMineGate(env.USAGE,scope,durSec,now)` 在 `.json/.empty` skip 之后、ASR 之前判：
+  `>3h→too-long`、余额≤0→`no-credit`、否则 ok。挡住就写 `.blocked` 标记（`{status,reason}`），`no-credit` **非终态**（下次余额够了删标记重挖；`too-long` 终态）。
+  扣费：ASR（`audio_info.duration` 毫秒，有上限钳制防 1000x）+ 每次 Claude（mine 与 text 路径都扣），全 best-effort（`try/catch`+`if(env.USAGE)`，**失败绝不中断挖文章**）。
+- **语音编辑计费（`agent/src/index.js` ArticleEditor）**：`meteredEditGate` 在调 Claude **之前**判（不足/超 100 编辑 → 拒绝、不空花），
+  通过队列广播 `{type:"error",id,message}`（"算力不足，无法继续编辑" / "这篇已达编辑上限（100 次）"），队列把 gate-拒绝标 terminal（不无限重试）；每次编辑 Claude 调用后 best-effort 扣费。
+- **`.blocked` 写入路由**：`functions/files/api/[[path]].js` 的 `PUT articles/<sub>/<stem>/blocked`（镜像 `/empty`）→ R2 key `users/<sub>/articles/<stem>.blocked`；
+  文章 DELETE 时连 `.blocked` 一起清。三处 key 一致：写入路由 = miner stale-delete = iOS/list 检测。
+- **读/admin 路由（agent worker，`handleUsageRoute`）**：`GET /agent/usage/balance`、`GET /agent/usage/ledger?limit=N`（用户自己 scope，401 无 token，D1 缺失/抛错→`degraded` 不崩）；
+  `POST /agent/usage/grant`（**admin `FILES_TOKEN`**，活动送算力的原语，`reason=campaign:*`）、`GET /agent/usage/admin/accounts`（admin，全量）。**admin 路由严格鉴权**，用户路由只读自己。
+- **防滥用硬闸**（独立于余额）：单条录音 ≤3 小时、单篇编辑 ≤100 次（真实编辑数）。¥10 量级余额通常先触发，这俩只拦极端。
+- **iOS**：`UsageView.swift`（算力余额 + 明细 + "无现金价值"说明，从 `/agent/usage/balance|ledger` 读）；入口在 `AccountView.swift` 账户卡；
+  `Library.swift`/`LibraryView.swift` 加 `.blocked` 检测 → 徽标 **余额不足 / 录音过长**（`.json/.empty` 优先）；`AgentSession.swift` 把编辑错误送进 `replyBubble`。
+- **admin 账本页**：`voicedrop/admin/usage.html`（贴 admin token 看全量余额/消费，仿 `mine.html`）。
+- **部署**：worker `cd ~/code/jianshuo.dev/agent && npx wrangler deploy`；Pages `cd ~/code/jianshuo.dev && npx wrangler pages deploy . --project-name jianshuo-dev`。
+  ⚠️ **Pages 部署坑**：根目录有 `.claude/worktrees/*/node_modules`(>25MiB) 会让 `pages deploy .` 报错，且 `.assetsignore` 当前匹配不到深层 node_modules。
+  解法：从 main 的**干净临时 worktree** 部署（`git worktree add --detach <tmp> main` → 在里面 `pages deploy .`），只传已提交内容。`.assetsignore`（排除 `reco/`+`node_modules`）**必须存在**，别误删。
+- **后续可做的小优化（非阻断，已记 `.superpowers/sdd/progress.md`）**：iOS `Entry.id=ts` 同秒可撞（改用 ledger 自增 id）；`fetchBlockReason` 串行可并行；usage 路由测试可补全；负 grant 语义。
 
 ## iOS app (`VoiceDropApp/`)
 
@@ -244,12 +333,29 @@ gear → **设置** (redesign "方案二"; the old `ContentView` 3-tab `TabView`
   rendered **with photos混排 inline** (`ArticleBody.segments` splits the body at `[[photo:N]]` markers;
   `PhotoTile` downloads each via the auth'd Files API and shows a full-width square; unreferenced photos
   append at the end). Per-article chip switcher only when >1. **Voice-edit locators** (design "Voice Edit
-  Locators"): while the user holds-to-talk, **line numbers** (第N行, one per real-line-break paragraph) fade
+  Locators"): while the user holds-to-talk, **line numbers** (第N行) fade
   in floating in the **left margin** — absolutely positioned via `.overlay(alignment:.topLeading)` + `offset`
-  so the text never reflows — and **图N badges** fade in on each image's top-left corner. `bodyRows()` flattens
-  the body into numbered paragraph/image rows. The live transcript bubble tints spoken 第N行/图N references
-  accent (`highlightedTranscript`). These are visual locators only — to make "第3行改简洁点/删掉图2"
-  actionable end-to-end the agent worker prompt would need the same numbering convention (not yet wired).
+  so the text never reflows — and **图N badges** fade in on each image's top-left corner. **`bodyRows()` numbers
+  EVERY row — paragraph AND image — on ONE continuous 第N行 counter (2026-06-27)**: a photo marker is its own
+  line and consumes a line number too, so paragraph line numbers accumulate across images and the displayed
+  第N行 lines up 1:1 with the raw body the agent edits (an image row shows BOTH its 第N行 in the margin and its
+  图M badge in the corner). Before this, 第N行 counted text paragraphs only — an image was skipped, so a
+  paragraph after an image showed a number lower than its true line position ("行号对不上").
+  **The model READS the line number, never counts it (2026-06-28).** The whole point is "模型理解的行 == 用户标的行".
+  Relying on the model to count 第N行 from the body is fragile (it miscounts long/image-laden bodies), so the
+  worker now hands it the numbers: `agent/src/linenum.js` (`numberBodyRows`/`locatorTable`) numbers a body with
+  the EXACT algorithm as iOS `bodyRows()`+`ArticleBody.segments` (continuous counter, photo-marker line = one
+  line + 图M), and `edit-turn.js` injects a **行号对照** block (`第3行：…` / `第4行 = 图2：[[photo:…]]`) into the
+  user message for the article the user is viewing. The prompt (`index.js` REVISE_SYSTEM) tells the model to
+  locate 第N行/图M **strictly by that table, not by counting**, and to omit numbers from output. `linenum.js` is
+  the SHARED contract — **if you change the numbering, change BOTH `linenum.js` (with its `test/linenum.test.js`)
+  AND the Swift `bodyRows`/`segments` in lockstep**, or the model's number drifts from the user's. Multi-article:
+  iOS renumbers 第1行 per displayed article, so the app sends **`articleIndex`** with each `instruct`
+  (`AgentSession.swift` `EditRequest.articleIndex`, persisted in `EditQueueStore`/`PersistedEdit`, carried
+  through the durable queue's new `article_index` column → `runEditTurn({articleIndex})`), and the worker numbers
+  THAT article. Old apps omit it → defaults to article 0. **iOS build + worker deploy must ship together** — a
+  mismatch (e.g. old app's text-only numbers vs. new worker's image-inclusive table) mislocates edits. The live
+  transcript bubble tints spoken 第N行/图N references accent (`highlightedTranscript`, regex `第[0-9]+行|图[0-9]+`).
   ⋯ menu: **发布/更新公众号草稿** ·
   **分享/更新 VD社区** · 系统分享 (labels flip once published/shared) · **编辑 = hold-to-talk voice editing**
   (serial queue, mic-as-indicator — see the agent Worker section). Share text = `composeShareText()`: ONE
@@ -259,10 +365,15 @@ gear → **设置** (redesign "方案二"; the old `ContentView` 3-tab `TabView`
   `users/<sub>/CLAUDE.md`; **微信公众号** AppID/AppSecret (format- + live-validated before save) →
   `WECHAT.json`; **账户** anon ID + copy ID / access token.
 
-## Server miner (`mining/mine.py`)
+## Server miner — now the Worker DO (`agent/src/miner.js`)
 
-- **Legacy/fallback path** — primary mining is now the Worker Miner DO (triggered on upload + cron every 6h). `mine.py` still works and can be run manually or via `POST /files/api/mine` → dispatches `mine.yml`. Idempotent: skips anything with a `.json` or `.empty` marker.
-- **R2 list truncation (fixed 2026-06-24):** R2 `list()` has a hard `limit: 1000`. With >1000 objects in the bucket (audio × 3 files + community/assets/links), the `/list` endpoint silently truncated — newest article JSONs (alphabetically last) were cut off, so mine.py saw them as unprocessed and re-mined every run. Two fixes: (1) `functions/files/api/[[path]].js` `/list` now paginates via cursor loop until `listed.truncated` is false; (2) `mine.py` calls `api_exists()` — a per-key HEAD check using `env.FILES.head(key)`, which is always strongly consistent — before processing, so a lagged or truncated list can never cause a re-mine. HEAD support also added to the `/download` route. Verified: post-fix run showed `list: 167 audio · 0 unprocessed`.
+- **The Python miner `mining/mine.py` was deleted (2026-06-26).** All mining runs in the Worker `Miner`
+  DO (`agent/src/miner.js`, a JS port of the old mine.py), triggered on upload + 6-hour cron + `POST
+  /files/api/mine` (→ dispatches the Worker DO, **not** a workflow). Idempotent: skips anything with a
+  `.json` or `.empty` marker. The only surviving Python is `mining/relay_server.py` (the WeChat publish
+  relay — see the WeChat section above) and the Volcano ASR helpers; `mine.py`/`publish_wechat.py` are in
+  the `mining/REMOVED.md` tombstone with git-restore commands.
+- **R2 list truncation (fixed 2026-06-24):** R2 `list()` has a hard `limit: 1000`. With >1000 objects in the bucket (audio × 3 files + community/assets/links), the `/list` endpoint silently truncated — newest article JSONs (alphabetically last) were cut off, so the miner saw them as unprocessed and re-mined every run. Two fixes: (1) `functions/files/api/[[path]].js` `/list` now paginates via cursor loop until `listed.truncated` is false; (2) the miner does a per-key HEAD check (`env.FILES.head(key)`, always strongly consistent) before processing, so a lagged or truncated list can never cause a re-mine. HEAD support also added to the `/download` route.
 - Per recording: presign R2 key → Volcano **async file ASR** (empty→`.empty no-speech`) → Claude API (`MINE_MODEL`, default claude-sonnet-4-6) → write `.json`. (No local download/ffprobe — the file API takes a URL.)
 - **JSON is forced**: `_articles_from` strips ``` / ```json fences + stray leading `json`, extracts the outermost `{…}`; if unparseable it **raises (retries next cycle)** — never stores raw model text as a body. (Assistant prefill is NOT used — sonnet-4-6 rejects it with 400.)
 - Reads the owner's `CLAUDE.md` and appends it after the system prompt.
@@ -279,6 +390,75 @@ gear → **设置** (redesign "方案二"; the old `ContentView` 3-tab `TabView`
 - **App Store**: 1.0 / build 18 (`eadd7bd`) submitted, `WAITING_FOR_REVIEW`. (Resubmit = cancel review submission via ASC API `PATCH reviewSubmissions/{id} canceled:true`, then dispatch `appstore`.)
 - **TestFlight public beta**: external group "Public Beta", link **https://testflight.apple.com/join/PbzFFRS2** (works once build 18 passes Beta App Review). Private group "Private Beta" has `gyjll@hotmail.com`.
 - Beta review contact reused from Cathier app: Jianshuo Wang / jianshuo@hotmail.com / +8613916146826.
+
+## Tests — backward-compat is the contract (`agent/test/`, `npm test`)
+
+117 vitest cases (run `cd ~/code/jianshuo.dev/agent && npm test`). The guiding rule:
+**the server must forever serve old data AND old clients** — a new app build (e.g. a
+future build 94) ships only after the old contract is pinned green. New version → push
+only once the old one is stable. Coverage by legacy surface:
+
+- **Schema migration** (`article-store.test.js`): v1 (top-level title/body) → schema-2
+  (top-level `articles`+`history`) → schema-3 (`versions[head]`) all migrate in memory
+  without losing content. `resolveArticles`/`withTopLevelArticles` (the SINGLE source of
+  truth every reader shares) are unit-pinned directly, across all three shapes + empty.
+- **Legacy docs on disk through the new API** (`articles-api.test.js`): reading/writing a
+  v1 or schema-2 doc via `GET/PUT /articles/<stem>` reconstructs top-level `articles`,
+  keeps `wechatMediaId`, and a NEW build editing an OLD article keeps the original as v1
+  (undo still works). `/download/<key>` (build ≤77 raw-download clients) reconstructs v1 +
+  schema-2 + schema-3. Anon-token (`anon_…`, the DEFAULT auth path) + `whoami` go through
+  real `onRequest`.
+- **Community** (`community-api.test.js`, new): legacy schema-1 inline posts read verbatim
+  (markers + `photos` array kept), schema-2 pointers resolve the LIVE article (incl. a v1
+  source doc), `list` mixes both schemas newest-first + reaps orphans, the Apple write-gate
+  (anon→403 `needs_apple_signin`, admin→403) and owner-only unshare hold.
+- **Photo markers** (`photo-markers.test.js`): new `[[photo:<relkey>]]` AND legacy
+  `[[photo:N]]` both resolve/strip.
+
+When changing any reader of an article/community doc, add the legacy shape to its test
+BEFORE the change — these are characterization guards (a v1-fallback removal was verified
+to fail 4 of them). Don't delete a legacy branch without deleting its test on purpose.
+
+## 设备配对登录（device-link）— 新设备登录老账号
+
+新设备输入老账号的 **6 位短码**（设置→账户里那串 = `sha256(anon_token)` 前 6 位十六进制，大小写不敏感）→
+老设备弹出 **4 位验证码** → 在新设备输入 → 老设备把自己的 `anon_…` 密钥**端到端加密**经服务器中转给新设备 →
+新设备 adopt，登录成功。本质 = 把老设备钥匙串里的密钥安全搬到新设备（因为 anon 身份不可重新签发：
+`scope = users/anon-<sha256(token)[:32]>/`，服务器不存 token、签不出指向老账号的新 token）。
+
+canonical 设计/计划：`docs/superpowers/specs/2026-06-27-device-link-pairing-design.md` +
+`docs/superpowers/plans/2026-06-27-device-link-pairing.md`。
+
+**Worker 侧（`agent/`，jianshuo.dev）：**
+- 纯逻辑模块 **`agent/src/devicelink.js`**（vitest 全测）：`genDistinctCodes` / `buildBroadcastMessage` /
+  `resolveMatchingScopes`（用 `FILES.list` 按 `users/anon-<6hex>` 前缀去重匹配账号，零注册表）/ 配对状态机
+  `createPairing`·`verifyPairing`·`completePairing`·`isExpired`。常量 `CODE_TTL_MS=120000`、`MAX_ATTEMPTS=5`、`MAX_MATCH=10`。
+- 新增 **`LinkBroker` Durable Object**（`agent/src/index.js`，`idFromName(pairingId)` 一对一）：存配对状态 +
+  持新设备的 wait-WebSocket，`alarm()` 2 分钟自清。薄壳，逻辑全在 devicelink.js。已加 wrangler binding + migration `v4`。
+- 新增路由 **`/agent/link/{start,socket,verify,complete,cancel}`**：start 解析匹配账号→每账号一个互异 4 位码→
+  向每个匹配 scope 的 StatusHub 推 `link_request{pairingId,code,pubkey}`；verify 命中→推 `link_release`，**不向新设备泄露 scope**；
+  complete 鉴权 **callerScope===releasingScope**（只有真主人能放行）→把密文 blob 经 socket 投给新设备。
+- **`StatusHub` 广播泛化**（唯一改的现有代码）：`/broadcast` 现转发任意 `payload`，`status_update` 向后兼容（`/agent/notify` 不受影响）。
+
+**端到端加密**：X25519 → HKDF-SHA256（salt `voicedrop-device-link/v1`、info `anon-token`、32B）→ AES-GCM。
+`blob = {epk, sealed}`（sealed = `AES.GCM.combined`）。**服务器只过 pubkey 和 blob，从不解密、不持久**（除 complete→ready 瞬时中转）。
+
+**iOS 侧（`VoiceDropApp/`）：**
+- **`DeviceLink.swift`**（新）：`DeviceLinkCrypto`（CryptoKit 加解密）/ `DeviceLinkResponder`（老设备：收 `link_request` 弹
+  `DeviceLinkApprovalSheet` 显码+「不是我」，收 `link_release` 加密 token→complete）/ `DeviceLinkStore`+`DeviceLinkView`
+  （新设备：输 6 位→开 socket→输 4 位→`link_ready` 解密→`AuthStore.adoptToken`→发 `.vdDidAdoptAccount` 刷新列表）。
+- `AppleAuth.swift` 加 **`AuthStore.adoptToken(_:)`**（替换匿名身份、清 session）。`StatusSession.swift` 的 `handle` 在
+  `status_update` 前先分支 `link_request`/`link_release`。`AccountView` 加「登录已有账号」入口，`LibraryView` 接审批卡 + adopt 后刷新。
+
+**安全**：4 位码 5 次/2 分钟（暴力≈5/10000，且真主人在自己设备看得到登录尝试）；token 全程 E2E；complete 强制 scope 匹配。
+**已知延后**：/start 的 IP+token 限流（Worker 无 KV 计数基建，本期只做「必须带有效 bearer」最小闸门）。
+
+**未来扩展（spec §11，本期未做）**：CLI/headless 分身登录——让 skill 以「你」的身份登录某账号，**服务器零改动**（CLI 扮演通用
+「新设备」，两处客户端适配：可移植 X25519+AES-GCM、自生成一次性 anon bearer）。方案 A=整把全权令牌复制到 `~/.config`（不可吊销）。
+
+**部署/测试状态（2026-06-28）**：代码完成、Worker 全量测试绿（vitest）、iOS BUILD SUCCEEDED。**Worker 部署 + 端到端两机手测
+DEFERRED 给用户**：`cd ~/code/jianshuo.dev/agent && npx wrangler deploy`（含 migration v4）+ iOS 推 main→TestFlight。
+两个特性分支 `device-link-pairing`（jianshuo.dev + voicedrop 各一），待合并。
 
 ## Known issues / TODO
 

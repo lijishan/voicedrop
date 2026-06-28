@@ -11,6 +11,7 @@ struct LibraryView: View {
     @State private var uploader = Uploader()
     @State private var community = CommunityStore()
     @State private var statusSession = StatusSession()
+    @State private var linkResponder = DeviceLinkResponder()
     @State private var tab: HomeTab = .recordings
     @State private var confirmDelete: Recording?
     @State private var confirmReprocess: Recording?
@@ -80,12 +81,22 @@ struct LibraryView: View {
         .task {
             statusSession.onPhase = { stem, phase in store.markPhase(stem: stem, phase: phase) }
             statusSession.onDone = { stem in store.markDone(stem: stem) }
+            statusSession.onLinkRequest = { pid, code, pubkey in linkResponder.present(pairingId: pid, code: code, pubkey: pubkey) }
+            statusSession.onLinkRelease = { pid in linkResponder.release(pairingId: pid) }
             statusSession.connect()
             await refresh()
+        }
+        .sheet(item: $linkResponder.pending) { p in
+            DeviceLinkApprovalSheet(responder: linkResponder, pending: p)
         }
         .onChange(of: scenePhase) { _, p in
             if p == .active { statusSession.connect(); Task { await refresh() } }
             else if p == .background { statusSession.disconnect() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .vdDidAdoptAccount)) { _ in
+            statusSession.disconnect()
+            statusSession.connect()
+            Task { await refresh() }
         }
     }
 
@@ -291,6 +302,8 @@ struct LibraryView: View {
                 ProgressView().controlSize(.mini).tint(Theme.accent)
                 Text(phase.badge).font(.system(size: 12.5)).foregroundStyle(Theme.accent)
             }
+        } else if let r = rec.blockReason {
+            badge(Color(hex: "C0392B"), r == "too-long" ? "录音过长" : "余额不足")
         } else {
             badge(Theme.amberPending, "待处理")
         }

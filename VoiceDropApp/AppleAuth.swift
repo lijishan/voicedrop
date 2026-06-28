@@ -23,10 +23,13 @@ final class AuthStore {
     var lastError: String?
     var isAuthenticated: Bool { session != nil }
 
-    /// The bearer used for uploads: the signed-in session if present, else the
-    /// anonymous iCloud-Keychain token (zero-login; same Apple ID -> same token
-    /// across devices and reinstalls). Always non-empty.
-    var bearer: String { session ?? anonToken }
+    /// The default credential for ALL API calls: the anonymous iCloud-Keychain token
+    /// (zero-login; same Apple ID -> same token across devices and reinstalls; always
+    /// non-empty). Apple sign-in does NOT change the default — the session's scope is
+    /// itself `users/anon-<hash>/` (auth/apple binds the Apple ID to this anon box), so
+    /// anon and session resolve to the SAME user_sub. The session JWT (`session`) is sent
+    /// ONLY where the server demands an Apple-verified identity: community share/unshare.
+    var bearer: String { anonToken }
 
     /// The user-facing identity string — exactly the server's storage prefix
     /// (`users/<anonId>/`). Safe to show and share: it's a one-way hash of the
@@ -50,6 +53,7 @@ final class AuthStore {
         session = keychainLoad(account: sessionAccount)
         if let s = session, isJWTExpired(s) { keychainDelete(account: sessionAccount); session = nil }
         anonToken = loadOrCreateAnon()
+        AppGroup.publishBearer(anonToken)   // mirror to the Share Extension
     }
 
     /// True if a JWT's `exp` (Unix seconds) is in the past, or it can't be parsed.
@@ -86,7 +90,7 @@ final class AuthStore {
         var req = URLRequest(url: authURL)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(anonToken)", forHTTPHeaderField: "Authorization")
+        req.setBearer(anonToken)
         var payload: [String: Any] = ["identityToken": identityToken]
         if let fullName { payload["fullName"] = fullName }
         if let email { payload["email"] = email }
@@ -155,6 +159,18 @@ final class AuthStore {
     /// irreversible. Used by the account page's 重置身份.
     func resetAnonymous() {
         let token = "anon_" + randomHex(32)
+        keychainSave(token, account: anonAccount)
+        anonToken = token
+        AppGroup.publishBearer(anonToken)   // keep the Share Extension in sync
+    }
+
+    /// Adopt an anon_… token received from another device (device-link login).
+    /// Overwrites the local anon identity in the iCloud Keychain; `anonId`/`bearer`
+    /// recompute automatically (computed properties on an @Observable).
+    func adoptToken(_ token: String) {
+        guard token.hasPrefix("anon_"), token.count >= 20 else { return }
+        session = nil
+        keychainDelete(account: sessionAccount)
         keychainSave(token, account: anonAccount)
         anonToken = token
     }
