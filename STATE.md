@@ -38,6 +38,8 @@ iOS app `文章` tab ──list+download──> renders articles, share, delete
 public web  jianshuo.dev/voicedrop/<token> ──> renders one article set (light theme)
 ```
 
+**Upload resilience (`Uploader.swift`, 2026-06-28):** the Documents dir IS the pending queue — a `VoiceDrop-*.m4a` still on disk = not yet uploaded (shows 正在上传). A PUT now (1) holds a `UIApplication` background-task assertion so an upload kicked off in the foreground finishes even if the user locks/switches right after recording (the old foreground-only `URLSession.shared` task was cancelled on suspend → takes stuck on 正在上传 forever); (2) retries transient failures (5xx / network / timeout) with 1.5s→3s backoff, 4xx/auth stop immediately, a still-failing take stays on disk for the next drain (never lost); (3) `drainPending` no longer `break`s on the first failure — it skips the stuck take so one bad file can't wedge the queue; (4) drains are serialised (`isDraining`/`drainAgain`) to kill the foreground-refresh / post-record / scene-change race; (5) an `NWPathMonitor` re-drains when connectivity returns.
+
 ⚠️ **CF same-zone fetch gotcha (2026-06-25):** Pages Functions cannot `fetch('https://jianshuo.dev/agent/...')` to call the Worker zone route — CF routes same-zone internal fetches through Pages routing first, which returns 405 for POST on static paths (Worker never sees the request). **Fix**: `dispatchMine` uses `https://voicedrop-agent.jianshuo.workers.dev/agent/mine/trigger` (the Worker's `workers_dev` subdomain), bypassing Pages routing entirely. `wrangler.jsonc` must have `"workers_dev": true`.
 
 Auth: per-user. App holds an anonymous capability token (`anon_…`, iCloud
