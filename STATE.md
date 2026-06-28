@@ -227,8 +227,13 @@ app's existing tokens) + `CLAUDE_API_KEY`. Two Durable Objects (`agent/src/index
   挖矿的文件 `volc.bigasr.auc`）→ 双向 pipe。**客户端持全部协议、服务端持密钥**——app 永不接触火山凭证。**iOS 端**
   `VoiceDropApp/VolcASRProtocol.swift`（火山二进制协议：gzip 分帧+序列号）+ `VoiceEdit.swift` 的 `SpeechDictation`
   （`AVAudioEngine` 取麦克风→重采样 mono 16k→WebSocket 流到 `/agent/asr` 带 `AuthStore.bearer`），`project.yml` 加
-  `-lz` 链 zlib。⚠️ **坑：CF Workers 出站 WebSocket 必须 `https://` 不能 `wss://`（否则 `Fetch API cannot load`→500）**；
-  单测只构造 Request 不 fetch，靠端到端 WS 冒烟测才抓得到。**iOS 与 worker 必须一起上**（先部署 worker、后发 build）。
+  `-lz` 链 zlib。⚠️ **两个坑（都已修）：(1) CF Workers 出站 WebSocket 必须 `https://` 不能 `wss://`（否则
+  `Fetch API cannot load`→500）；(2) 代理不能直接 `target.send(event.data)`——CF 把二进制帧的 `event.data` 给成
+  Blob，`send(Blob)` 会强转成字符串 `"[object Blob]"`（13 字节），两个方向的二进制全毁：音频以文字 "[object Blob]"
+  到火山→火山不转写→「说话和没说一样」。修法：两 socket 设 `binaryType="arraybuffer"` + `toSendablePayload()`
+  把 Blob 转回 ArrayBuffer，经保序 promise 链转发。纯服务端修复，iOS build 107 无需重打。** ⚠️ **冒烟测必须
+  「发真实音频 + 解码回包断言转写文字」**——之前只发配置帧、把强转的 "[object Blob]" 误当 13 字节有效帧（假阳性），
+  导致坑 (2) 两次上线都没真正工作过。**iOS 与 worker 必须一起上**（先部署 worker、后发 build）。
   canonical spec：`docs/superpowers/specs/2026-06-28-voice-edit-volc-asr-proxy.md`。
   **历史**：先由 houleixx 两 PR 落地→验证可用→应要求回滚→再以一方提交按同设计重新引入（git 史含 merge→revert→re-add）。测试 `agent/test/asr-proxy.test.js`。
 

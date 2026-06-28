@@ -50,13 +50,30 @@ boundary crisp: the app holds no Volc secret.
   tail result.
 - `project.yml` — `OTHER_LDFLAGS: -lz` to link zlib for gzip.
 
-## Critical gotcha (baked in)
+## Critical gotchas (both baked in)
 
-**CF Workers outbound WebSocket must use an `https://` URL**, not `wss://`. A
-`wss://` scheme makes `fetch()` throw `Fetch API cannot load`, so every
-connection 500s before reaching Volcengine. The unit test only builds the
-`Request` (never fetches), so it cannot catch this — an end-to-end WebSocket
-smoke test is the only guard.
+1. **CF Workers outbound WebSocket must use an `https://` URL**, not `wss://`. A
+   `wss://` scheme makes `fetch()` throw `Fetch API cannot load`, so every
+   connection 500s before reaching Volcengine.
+
+2. **The relay must NOT forward `event.data` straight to `send()`.** CF Workers
+   deliver a binary WS frame's `event.data` as a **Blob**, and
+   `WebSocket.send(blob)` coerces it to the literal STRING `"[object Blob]"` (13
+   bytes). A naive `target.send(event.data)` therefore corrupts EVERY binary
+   frame in BOTH directions — the app's audio reaches Volcengine as the text
+   `"[object Blob]"` (so it transcribes nothing → "说话和没说一样"), and results
+   come back mangled too. Fix = `binaryType="arraybuffer"` on both sockets +
+   `toSendablePayload()` (Blob → ArrayBuffer) forwarded through a per-direction
+   promise chain that preserves frame order. **This is purely server-side** — a
+   working proxy makes the existing iOS build work with no rebuild.
+
+**Testing trap:** the unit test only builds the `Request`/normalizes a payload —
+it never opens a real socket. An end-to-end WebSocket smoke test is the ONLY
+guard, and it must **stream real audio and decode the responses** (gunzip the
+frames, parse the JSON, assert a transcript). An earlier "smoke test" only sent
+the config frame and misread the coerced `"[object Blob]"` reply as a valid
+13-byte Volc frame — a false positive that let gotcha #2 ship twice without ever
+working. Always assert on the decoded transcript, never on "bytes came back".
 
 ## Rollout ordering
 
