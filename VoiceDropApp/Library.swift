@@ -125,6 +125,7 @@ struct Recording: Identifiable, Hashable {
     var articleTitle: String?    // first mined article's title; fills the place slot once 已成文
     var uploading: Bool = false  // a local take still in the upload queue (not yet on the server)
     var phase: MiningPhase? = nil // server is actively mining this right now (WebSocket push); nil = not in-flight
+    var blockReason: String? = nil   // "no-credit" | "too-long"; nil = not blocked
 
     var processing: Bool { phase != nil }
 
@@ -228,6 +229,14 @@ final class LibraryStore {
             }
             .sorted { $0.audioName > $1.audioName }   // newest first (timestamped names)
 
+            // Fetch block reasons (.blocked marker) for recordings the worker couldn't mine.
+            // .json / .empty take precedence — only fetch when neither is present.
+            for i in recordings.indices {
+                guard !recordings[i].hasArticles, !recordings[i].isEmpty,
+                      names.contains("articles/\(recordings[i].stem).blocked") else { continue }
+                recordings[i].blockReason = await fetchBlockReason(recordings[i].stem)
+            }
+
             // Re-apply in-flight processing state from WebSocket, and prune stems
             // that are now done (article or empty marker already landed in R2).
             for i in recordings.indices {
@@ -315,6 +324,14 @@ final class LibraryStore {
         struct EmptyMarker: Decodable { let reason: String? }
         do { return try JSONDecoder().decode(EmptyMarker.self, from: await get(rec.emptyKey)).reason }
         catch { return nil }
+    }
+
+    /// Fetch the reason from a `.blocked` marker (no-credit / too-long). Defaults to
+    /// "no-credit" on any fetch or parse failure so callers always get a non-nil String.
+    private func fetchBlockReason(_ stem: String) async -> String {
+        guard let data = try? await get("articles/\(stem).blocked"),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "no-credit" }
+        return obj["reason"] as? String ?? "no-credit"
     }
 
     /// Delete a whole recording from R2: the audio plus every sidecar marker

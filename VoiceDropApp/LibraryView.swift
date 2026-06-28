@@ -302,6 +302,8 @@ struct LibraryView: View {
                 ProgressView().controlSize(.mini).tint(Theme.accent)
                 Text(phase.badge).font(.system(size: 12.5)).foregroundStyle(Theme.accent)
             }
+        } else if let r = rec.blockReason {
+            badge(Color(hex: "C0392B"), r == "too-long" ? "录音过长" : "余额不足")
         } else {
             badge(Theme.amberPending, "待处理")
         }
