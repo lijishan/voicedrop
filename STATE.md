@@ -156,9 +156,17 @@ first-54-chars fallback. Empty body → no `digest` field (WeChat's auto-grab, a
 
 > Public **link card** (系统分享 a `/voicedrop/<token>` URL into WeChat chat) is a SEPARATE path —
 > `functions/voicedrop/[token].js` `metaTags()` already emits `og:image` = the section's first photo
-> (absolute URL) + `<meta name=description>` summary + `<link rel=image_src>` for old WeChat. If a shared
-> link still shows no image, it's almost always WeChat's per-URL link-card **cache** — test with a fresh
-> share. (Both relay + Pages redeployed 2026-06-28.)
+> (absolute URL) + `<meta name=description>` summary + `<link rel=image_src>` for old WeChat.
+> **iOS share-payload fix (2026-06-28):** the page og tags only matter if the app hands WeChat a **URL**, not
+> text. `RecordingDetailView.share()` used to share ONE combined string (`正文 + 链接`) → WeChat posted it as a
+> **plain text message with NO card** (this was why "依然没有图/description"). Now the share goes through
+> **`ArticleShareItem: UIActivityItemSource`** (in `RecordingDetailView.swift`): for WeChat
+> (`com.tencent.xin.*`, 发送给朋友 + 朋友圈) it returns the **bare URL** so WeChat builds the rich card from the
+> page og tags, and it also supplies **`LPLinkMetadata`** (article title + first photo) so the card shows a
+> thumbnail without waiting on WeChat's crawl; for **X / 其它** it still returns the combined inline-URL text (X
+> drops a separately-attached URL item). Requires a **new TestFlight build** to take effect. If a shared link
+> STILL shows no image after a new build, it's WeChat's per-URL link-card **cache** — test with a fresh share.
+> (relay + Pages already redeployed 2026-06-28.)
 
 **Inline body photos in WeChat drafts (2026-06-26):** the body's `[[photo:<relkey>]]` markers used to be
 **stripped** from WeChat drafts (the markers never carried the actual image). Now the relay embeds them:
@@ -343,7 +351,11 @@ gear → **设置** (redesign "方案二"; the old `ContentView` 3-tab `TabView`
 - **VD社区** — see the Community section above.
 - **录音 (takeover)** `RecordSession.swift` — full-screen, opens **idle** (tap-to-record). Records to a
   **staging name** `recording-<ts>.m4a`, promoted to the enriched `VoiceDrop-*` name only after finalize
-  → fixes the moov-less/0-byte corrupt-upload race; uploads on finish. **Faint 拍照 trigger** (spec =
+  → fixes the moov-less/0-byte corrupt-upload race; uploads on finish. **Encoder = speech-tuned AAC
+  (`Prefs.recorderSettings` in `Theme.swift`, 2026-06-28):** mono, **标准 16 kHz / 32 kbps · 高 24 kHz /
+  64 kbps** (was 44.1 kHz / 64k·96k). The audio only ever feeds in-app playback + Volcano ASR (16 kHz native),
+  so 44.1 kHz wasted bits — the new rate **halves the file size & upload time** (≈1.2 MB vs 2.4 MB per 5 min on
+  标准) with no ASR-accuracy loss. New recordings only; old files & the `.m4a`/moov contract unchanged. **Faint 拍照 trigger** (spec =
   `handoff_recording_camera/README.md`): a **very subtle thin `camera` icon** (`#A89E8E` @ 0.45 opacity, no
   container) in the blank area right of the 停止 key, at that area's **horizontal midpoint (≈75% of screen
   width)**, with a 「拍照」label (11pt `#C2B8A8`) below it. Implemented as an `.overlay(alignment:.center)` on the
@@ -405,9 +417,11 @@ gear → **设置** (redesign "方案二"; the old `ContentView` 3-tab `TabView`
   transcript bubble tints spoken 第N行/图N references accent (`highlightedTranscript`, regex `第[0-9]+行|图[0-9]+`).
   ⋯ menu: **发布/更新公众号草稿** ·
   **分享/更新 VD社区** · 系统分享 (labels flip once published/shared) · **编辑 = hold-to-talk voice editing**
-  (serial queue, mic-as-indicator — see the agent Worker section). Share text = `composeShareText()`: ONE
-  string (标题 + 正文开头 cut at a sentence boundary, sized to X's 280 weighted cap minus the 23-weight URL)
-  + the short link (single string, not String+URL — X drops one otherwise).
+  (serial queue, mic-as-indicator — see the agent Worker section). 系统分享 = `share()`: builds the full
+  text (所有 section 标题+正文, markers stripped) + the `?s=<section>` short link, wrapped in
+  **`ArticleShareItem`** which adapts per target — WeChat gets the bare URL (rich link card from page og
+  tags + `LPLinkMetadata` title/首图), X / 其它 get the combined inline-URL string (X drops a separate URL
+  item). See the WeChat link-card note above.
 - **设置** `SettingsView.swift` (`SettingsStore`) — **名字** + **文风** (→ full-screen editor sheet) →
   `users/<sub>/CLAUDE.md`; **微信公众号** AppID/AppSecret (format- + live-validated before save) →
   `WECHAT.json`; **账户** anon ID + copy ID / access token.

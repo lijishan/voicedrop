@@ -154,16 +154,20 @@ final class Prefs {
         highQuality = d.object(forKey: "pref.highQuality") as? Bool ?? false
     }
 
-    /// AVAudioRecorder settings for the chosen quality. 标准 = the original 64 kbps;
-    /// 高 = 96 kbps / high.
+    /// AVAudioRecorder settings, tuned for SPEECH → ASR (not music). The audio is only
+    /// ever (a) played back in-app and (b) fed to Volcano ASR, which works at 16 kHz —
+    /// so the old 44.1 kHz / 64 kbps was pure waste (the encoder spent bits on a band
+    /// nothing consumes). 16 kHz mono + a low AAC bitrate **halves the file and the
+    /// upload time** with no loss of ASR accuracy. 标准 = 16 kHz / 32 kbps (≈1.2 MB per
+    /// 5 min, was ~2.4 MB); 高 = 24 kHz / 64 kbps for fuller playback (≈2.4 MB, was ~3.6 MB).
     nonisolated var recorderSettings: [String: Any] {
         let high = UserDefaults.standard.object(forKey: "pref.highQuality") as? Bool ?? false
         return [
             AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44_100,
+            AVSampleRateKey: high ? 24_000 : 16_000,
             AVNumberOfChannelsKey: 1,
             AVEncoderAudioQualityKey: (high ? AVAudioQuality.high : .medium).rawValue,
-            AVEncoderBitRateKey: high ? 96_000 : 64_000,
+            AVEncoderBitRateKey: high ? 64_000 : 32_000,
         ]
     }
 

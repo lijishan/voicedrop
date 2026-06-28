@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import PhotosUI
+import LinkPresentation
 
 /// A transient one-line reply from the editing agent.
 struct AgentReply: Identifiable, Equatable {
@@ -103,7 +104,7 @@ struct RecordingDetailView: View {
                 if settings.wechatConfigured { Task { await sendWechat() } }
             }
         }) { WechatSettingsSheet(store: settings) }
-        .sheet(item: $sharePayload) { ShareSheet(items: [$0.text]) }
+        .sheet(item: $sharePayload) { ShareSheet(items: $0.activityItems) }
         .sheet(isPresented: $showCommunityTerms) {
             CommunityTermsSheet(onAgree: { Task { await toggleCommunity(true) } }, onCancel: {})
         }
@@ -367,13 +368,36 @@ struct RecordingDetailView: View {
             return articles.count > 1 ? "【\(a.title)】\n\n\(body)" : "\(a.title)\n\n\(body)"
         }.joined(separator: "\n\n---\n\n")
 
-        // Append the short link if we can get one
-        if let u = await store.shareURL(recording, section: articleIndex) {
-            sharePayload = SharePayload(text: allText + "\n\n" + u.absoluteString)
-        } else {
-            // Share text even without URL
-            sharePayload = SharePayload(text: allText)
+        // Append the short link if we can get one. When we have a URL we hand it to
+        // the share sheet as a real link (with the article title + first photo as
+        // LPLinkMetadata), so WeChat builds a rich link card — image + description —
+        // from the page's og tags. A combined text string would land in WeChat as a
+        // plain text message with NO card (the bug this fixes). X still gets the
+        // inline-URL text via ArticleShareItem's per-target branching.
+        guard let u = await store.shareURL(recording, section: articleIndex) else {
+            sharePayload = SharePayload(text: allText)        // no link → text only
+            return
         }
+        let title = articles[safe: articleIndex]?.title ?? "VoiceDrop"
+        let image = await firstPhotoImage()                  // best-effort card thumbnail
+        sharePayload = SharePayload(text: allText + "\n\n" + u.absoluteString,
+                                    url: u, title: title, image: image)
+    }
+
+    /// The first photo of the currently-shown article, used as the WeChat link-card
+    /// thumbnail. Best-effort: nil when the article has no photo or the fetch fails —
+    /// WeChat then falls back to the page's og:image.
+    private func firstPhotoImage() async -> UIImage? {
+        guard let body = articles[safe: articleIndex]?.body else { return nil }
+        let photos = doc?.photos ?? []
+        guard let scope = await store.ownerScope() else { return nil }
+        for seg in ArticleBody.segments(body) {
+            guard case .photo(let token) = seg,
+                  let relKey = ArticleBody.resolvePhotoKey(token, photos: photos) else { continue }
+            if let data = await store.photoData(fullKey: scope + relKey),
+               let img = UIImage(data: data) { return img }
+        }
+        return nil
     }
 
     private func toggleCommunity(_ visible: Bool) async {
@@ -853,8 +877,72 @@ struct DownTriangle: Shape {
     }
 }
 
-/// A ready-to-share payload (article excerpt + short link), one String.
-struct SharePayload: Identifiable { let text: String; var id: String { text } }
+/// A ready-to-share payload. `text` = "标题+正文 + 链接" (used by X / 复制 / 备忘录 等);
+/// when `url` is set, link-card targets (WeChat) get the bare URL instead so they
+/// render a rich card from the page's og:image / description.
+struct SharePayload: Identifiable {
+    let text: String
+    var url: URL? = nil
+    var title: String = "VoiceDrop"
+    var image: UIImage? = nil
+    var id: String { text }
+
+    /// The activity items handed to `UIActivityViewController`. With a URL we wrap
+    /// everything in `ArticleShareItem` (per-target adaptation); without one it's
+    /// plain text (no card possible anyway).
+    var activityItems: [Any] {
+        guard let url else { return [text] }
+        return [ArticleShareItem(text: text, url: url, title: title, image: image)]
+    }
+}
+
+/// Adapts one share per target app so each gets what it renders best:
+/// - WeChat (发送给朋友 + 朋友圈, `com.tencent.xin.*`) gets the bare URL → it builds a
+///   rich link card from the page's og:image + `<meta name=description>`. Handing it a
+///   combined text string would post a plain text message with NO card — the original bug.
+/// - X / 其它 get the combined "标题+正文 + 链接" text (X drops a separately-attached URL
+///   item, so the link must stay inline in that single string).
+/// LPLinkMetadata (article title + first photo) is also provided so the card shows a
+/// thumbnail immediately, without waiting on WeChat's server-side crawl.
+final class ArticleShareItem: NSObject, UIActivityItemSource {
+    private let text: String
+    private let url: URL
+    private let shareTitle: String
+    private let image: UIImage?
+
+    init(text: String, url: URL, title: String, image: UIImage?) {
+        self.text = text
+        self.url = url
+        self.shareTitle = title
+        self.image = image
+    }
+
+    private func wantsLinkCard(_ type: UIActivity.ActivityType?) -> Bool {
+        guard let raw = type?.rawValue else { return false }
+        return raw.hasPrefix("com.tencent.xin")
+    }
+
+    func activityViewControllerPlaceholderItem(_ c: UIActivityViewController) -> Any { text }
+
+    func activityViewController(_ c: UIActivityViewController,
+                                itemForActivityType type: UIActivity.ActivityType?) -> Any? {
+        wantsLinkCard(type) ? url : text
+    }
+
+    func activityViewController(_ c: UIActivityViewController,
+                                subjectForActivityType type: UIActivity.ActivityType?) -> String {
+        shareTitle
+    }
+
+    func activityViewControllerLinkMetadata(_ c: UIActivityViewController) -> LPLinkMetadata? {
+        let md = LPLinkMetadata()
+        md.originalURL = url
+        md.url = url
+        md.title = shareTitle
+        if let image { md.imageProvider = NSItemProvider(object: image) }
+        return md
+    }
+}
 
 /// Full-width square photo taken during a recording session, rendered inline in
 /// the article at its `[[photo:N]]` marker. Loads from the public `/photo/<full key>`
