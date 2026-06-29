@@ -121,6 +121,7 @@ def md_to_wechat_html(md, photo_url=None):
     a `[[photo:...]]` marker as literal text. `photo_url` is a callable key -> url|None.
     The key is now a relative photo key (e.g. photos/<ts>/<offset>-<rand>.jpg); old
     numeric `[[photo:N]]` markers don't resolve and are simply stripped."""
+    md = re.sub(r'<!--.*?-->', '', md, flags=re.S)   # strip version-origin comment (<!--风格vN-->)
     md = re.sub(r'\n{3,}', '\n\n', md)
     lines = md.split('\n')
     parts = []
@@ -254,7 +255,8 @@ def _digest_from_body(body_md, limit=110):
     image/link syntax and inline marks, collapses whitespace, trims to `limit` chars on
     a clean boundary. WeChat shows ~54 chars and stores up to 120 — we cap a bit under.
     Empty body → '' (WeChat then auto-grabs the first chars, same as before)."""
-    s = re.sub(r"\[\[photo:[^\]]+\]\]", "", body_md or "")
+    s = re.sub(r"<!--.*?-->", "", body_md or "", flags=re.S)   # version-origin comment
+    s = re.sub(r"\[\[photo:[^\]]+\]\]", "", s)
     s = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", s)   # ![alt](url) / [text](url) → text
     s = re.sub(r"[#>*`_~]+", "", s)                    # heading / inline marks
     s = re.sub(r"\s+", " ", s).strip()

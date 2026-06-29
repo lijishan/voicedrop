@@ -45,7 +45,6 @@ struct RecordingDetailView: View {
     @State private var connected = false
     @State private var confirmDeleteFromDetail = false
     @State private var showingInsertPhoto = false
-    @State private var hasSpokenOnce = false   // once set, editing toolbar stays visible until dismiss
 
     // Undo/redo: versions (oldest-first) + head loaded on open and refreshed after
     // each agent edit. Undo/redo move head locally for instant UI update, then
@@ -60,10 +59,24 @@ struct RecordingDetailView: View {
         guard let last = versions.last else { return false }
         return head < last.v
     }
-    // Editing toolbar shows once the user has ever spoken, and stays until the view is dismissed.
-    private var isEditing: Bool { hasSpokenOnce || dictation.isRecording || agent.state == .working }
 
     private var articles: [MinedArticle] { doc?.resolvedArticles ?? [] }
+
+    /// Origin label of the current version, e.g. "风格v7", parsed from the body's
+    /// `<!--…-->` comment. Only shown when there's more than one version to switch among.
+    private var currentVersionLabel: String? {
+        guard versions.count > 1, let body = articles.first?.body else { return nil }
+        return ArticleBody.versionLabel(body)
+    }
+    private func versionBadge(_ label: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "sparkles").font(.system(size: 10))
+            Text(label).font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(Theme.accent)
+        .padding(.horizontal, 9).padding(.vertical, 4)
+        .background(Theme.accentSoft, in: Capsule())
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -225,7 +238,8 @@ struct RecordingDetailView: View {
     // MARK: Nav bar
 
     /// 顶部导航：返回 … 播放键 [工具] ⋯。整条播放条收进右上角的播放键（外圈细圆环显示进度），
-    /// 播放键常驻在 ⋯ 左边；进入编辑态时在播放键与 ⋯ 之间插入「插入照片 + 撤销/重做」，⋯ 始终保留。
+    /// 工具栏常驻：播放键 + 插入照片 + 撤销/重做（有多版本时）+ ⋯，都一直显示，
+    /// 不再要求先 push-to-talk 才出现。
     private var navBar: some View {
         HStack {
             NavSquare(systemName: "chevron.left", stroke: Theme.inkRead, border: Theme.borderRead) { dismiss() }
@@ -234,20 +248,17 @@ struct RecordingDetailView: View {
             if !articles.isEmpty {
                 HStack(spacing: 10) {
                     navPlayButton
-                    if isEditing {
-                        insertPhotoButton
+                    insertPhotoButton
+                    if versions.count > 1 {
+                        undoRedoGroup
                             .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                        if versions.count > 1 {
-                            undoRedoGroup
-                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                        }
                     }
-                    moreMenu   // ⋯ 常驻：平时态在播放键右边；编辑态退到工具组右边，始终保留
+                    moreMenu   // ⋯ 常驻
                 }
             }
         }
         .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 8)
-        .animation(.easeInOut(duration: 0.2), value: isEditing)
+        .animation(.easeInOut(duration: 0.2), value: versions.count > 1)
     }
 
     /// 播放键 + 外圈进度细圆环（取代整条播放条）。点一下播放/暂停；首次播放先下载音频。
@@ -420,6 +431,7 @@ struct RecordingDetailView: View {
         // 整条播放条已收进顶部播放键，正文直接上移、阅读区更大。
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if let label = currentVersionLabel { versionBadge(label).padding(.top, 12) }
                 if let a = articles[safe: articleIndex] {
                     Text(a.title)
                         .font(.system(size: 23, weight: .semibold)).foregroundStyle(Theme.inkRead)
@@ -785,7 +797,7 @@ struct RecordingDetailView: View {
             .onChanged { v in
                 // No working-state gate: speak the next sentence while the last rewrites.
                 guard dictation.authorized == true else { return }
-                if !dictation.isRecording { dictation.start(); hasSpokenOnce = true }
+                if !dictation.isRecording { dictation.start() }
                 willCancel = v.translation.height < -60
             }
             .onEnded { v in
