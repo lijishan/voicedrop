@@ -188,6 +188,16 @@ struct Recording: Identifiable, Hashable {
         return iso.date(from: s)
     }
 
+    /// THE single source of truth for recording list order: newest first.
+    /// In-flight rows (uploading / just-uploaded — `uploaded` still "") are the newest
+    /// and sort to the very top; everything else by R2 `uploaded` time descending (the
+    /// filename is not a reliable clock), filename as a stable tiebreak.
+    /// Sort in ONE place only (`LibraryStore.load`); never re-sort downstream.
+    static func newestFirst(_ a: Recording, _ b: Recording) -> Bool {
+        if a.uploaded.isEmpty != b.uploaded.isEmpty { return a.uploaded.isEmpty }
+        return (a.uploaded, a.audioName) > (b.uploaded, b.audioName)
+    }
+
     /// "0m33s"-style duration field if present.
     var durationLabel: String? {
         stem.components(separatedBy: "-").first { $0.range(of: #"^\d+m\d+s$"#, options: .regularExpression) != nil }
@@ -252,11 +262,9 @@ final class LibraryStore {
                                  hasArticles: names.contains("articles/\(stem).json"),
                                  isEmpty: names.contains("articles/\(stem).empty"))
             }
-            // Newest first by ACTUAL time. The filename's embedded timestamp isn't a
-            // reliable clock (clock skew, staging/promotion, imported/renamed takes), so
-            // sort by R2 `uploaded` — an ISO-8601 UTC string, lexicographically ==
-            // chronologically. Fall back to the name only when `uploaded` ties/missing.
-            .sorted { ($0.uploaded, $0.audioName) > ($1.uploaded, $1.audioName) }
+            // The ONE place recordings get ordered — newest first. Every consumer
+            // (LibraryView, ExportSheet) reads this order; nobody re-sorts. See Recording.newestFirst.
+            .sorted(by: Recording.newestFirst)
 
             // Fetch block reasons (.blocked marker) for recordings the worker couldn't mine.
             // .json / .empty take precedence — only fetch when neither is present.
