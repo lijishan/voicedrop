@@ -155,8 +155,11 @@ struct Recording: Identifiable, Hashable {
     /// timestamp isn't a reliable clock, so prefer `uploaded`; fall back to the name
     /// only when `uploaded` is missing/unparseable.
     var dateTimeLabel: String? {
-        if let d = Recording.uploadedDate(uploaded) { return Recording.dtFmt.string(from: d) }
-        return nameDateTimeLabel
+        guard let d = Recording.uploadedDate(uploaded) else { return nameDateTimeLabel }
+        let out = DateFormatter()
+        out.locale = Locale(identifier: "zh_CN")
+        out.dateFormat = "M月d日 HH:mm"   // no timeZone → device local (UTC+8 for the user)
+        return out.string(from: d)
     }
 
     /// Legacy fallback: parse "6月18日 14:30" out of the VoiceDrop-<ts>… filename.
@@ -173,17 +176,17 @@ struct Recording: Identifiable, Hashable {
     }
 
     /// Parse R2's ISO-8601 `uploaded` (with or without fractional seconds) into a Date.
+    /// Formatters are built per call, NOT static: ISO8601DateFormatter isn't Sendable, and a
+    /// `static let` on this non-isolated struct fails Swift 6 strict-concurrency checks. This
+    /// matches the codebase's other date parsing (RecordingName / Community build formatters locally).
     static func uploadedDate(_ s: String) -> Date? {
         guard !s.isEmpty else { return nil }
-        return isoFrac.date(from: s) ?? isoPlain.date(from: s)
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: s) { return d }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: s)
     }
-    private static let isoFrac: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
-    }()
-    private static let isoPlain = ISO8601DateFormatter()   // default = .withInternetDateTime (no fraction)
-    private static let dtFmt: DateFormatter = {
-        let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f
-    }()   // no explicit timeZone → device local (UTC+8 for the user)
 
     /// "0m33s"-style duration field if present.
     var durationLabel: String? {
