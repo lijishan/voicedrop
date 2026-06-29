@@ -306,7 +306,7 @@ struct LibraryView: View {
                 Text(phase.badge).font(.system(size: 12.5)).foregroundStyle(Theme.accent)
             }
         } else if let r = rec.blockReason {
-            badge(Color(hex: "C0392B"), r == "too-long" ? "录音过长" : "余额不足")
+            badge(Color(hex: "C0392B"), BlockReason(rawValue: r)?.label ?? BlockReason.noCredit.label)
         } else {
             badge(Theme.amberPending, "待处理")
         }

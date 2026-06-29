@@ -80,7 +80,7 @@ final class Uploader {
         let files = (try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil)) ?? []
         return files
-            .filter { $0.lastPathComponent.hasPrefix("VoiceDrop-") && $0.pathExtension == "m4a" }
+            .filter { RecordingName.isRecordingFile($0.lastPathComponent) }
             .filter { Self.isUploadable($0) }   // skip 0-byte / moov-less junk so it can't block the queue
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }

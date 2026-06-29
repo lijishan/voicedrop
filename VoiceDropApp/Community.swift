@@ -257,10 +257,8 @@ final class CommunityStore {
 func communityDate(_ ms: Double?) -> String {
     guard let ms else { return "" }
     let date = Date(timeIntervalSince1970: ms / 1000)
-    let f = DateFormatter()
-    f.locale = Locale(identifier: "zh_CN")
-    f.dateFormat = Calendar.current.isDate(date, equalTo: Date(), toGranularity: .year) ? "M月d日" : "yyyy年M月d日"
-    return f.string(from: date)
+    let fmt = Calendar.current.isDate(date, equalTo: Date(), toGranularity: .year) ? "M月d日" : "yyyy年M月d日"
+    return DateFormatter.zh(fmt).string(from: date)
 }
 
 // MARK: - Community post view
@@ -673,9 +671,7 @@ struct CommunityPostView: View {
         }
     }
 
-    private func timeString(_ t: TimeInterval) -> String {
-        let s = Int(t); return String(format: "%02d:%02d", s / 60, s % 60)
-    }
+    private func timeString(_ t: TimeInterval) -> String { t.clockString }
 }
 
 private extension Array {

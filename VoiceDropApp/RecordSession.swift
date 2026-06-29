@@ -199,7 +199,5 @@ struct RecordSession: View {
         if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
     }
 
-    private func timeString(_ t: TimeInterval) -> String {
-        let total = Int(t); return String(format: "%02d:%02d", total / 60, total % 60)
-    }
+    private func timeString(_ t: TimeInterval) -> String { t.clockString }
 }

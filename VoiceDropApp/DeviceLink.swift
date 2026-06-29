@@ -32,16 +32,9 @@ enum DeviceLinkCrypto {
         return (b64url(eph.publicKey.rawRepresentation), b64url(sealed.combined!))
     }
 
-    // base64url helpers (no padding)
-    static func b64url(_ d: Data) -> String {
-        d.base64EncodedString().replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-    }
-    static func b64urlDecode(_ s: String) -> Data {
-        var t = s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-        while t.count % 4 != 0 { t += "=" }
-        return Data(base64Encoded: t) ?? Data()
-    }
+    // base64url helpers (no padding) — delegate to the shared Data extension.
+    static func b64url(_ d: Data) -> String { d.base64URLEncodedString }
+    static func b64urlDecode(_ s: String) -> Data { Data(base64URLEncoded: s) ?? Data() }
 
     #if DEBUG
     // One-shot round-trip self-check; call from app launch in DEBUG, confirm console, then remove.

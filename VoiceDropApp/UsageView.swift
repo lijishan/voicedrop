@@ -53,12 +53,7 @@ struct UsageView: View {
     }
     private func fmt(_ s: Double) -> String { s < 10 ? String(format: "%.1f", s) : String(Int(s.rounded())) }
 
-    private static let tsFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "zh_CN")
-        f.dateFormat = "yyyy年M月d日 HH:mm"
-        return f
-    }()
+    private static let tsFormatter = DateFormatter.zh("yyyy年M月d日 HH:mm")
     private func timeText(_ e: Entry) -> String {
         // ledger ts is epoch milliseconds (server writes Date.now())
         Self.tsFormatter.string(from: Date(timeIntervalSince1970: Double(e.ts) / 1000))

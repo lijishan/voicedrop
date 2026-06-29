@@ -135,6 +135,13 @@ enum MiningPhase: String { case asr, mining
     var badge: String { self == .asr ? "听录音" : "挖文章" }
 }
 
+/// Why the miner couldn't process a recording (the `.blocked` marker's reason). The
+/// ONE place the wire strings + their badge labels live (was split between the default
+/// in LibraryStore.fetchBlockReason and the label mapping in LibraryView).
+enum BlockReason: String { case noCredit = "no-credit", tooLong = "too-long"
+    var label: String { self == .tooLong ? "录音过长" : "余额不足" }
+}
+
 /// A recording as seen in the user's R2 space: the audio key plus whether the
 /// miner has produced an article JSON for it yet.
 struct Recording: Identifiable, Hashable {
@@ -181,10 +188,8 @@ struct Recording: Identifiable, Hashable {
     /// only when `uploaded` is missing/unparseable.
     var dateTimeLabel: String? {
         guard let d = Recording.uploadedDate(uploaded) else { return nameDateTimeLabel }
-        let out = DateFormatter()
-        out.locale = Locale(identifier: "zh_CN")
-        out.dateFormat = "M月d日 HH:mm"   // no timeZone → device local (UTC+8 for the user)
-        return out.string(from: d)
+        // no timeZone → device local (UTC+8 for the user)
+        return DateFormatter.zh("M月d日 HH:mm").string(from: d)
     }
 
     /// Legacy fallback: "6月18日 14:30" from the VoiceDrop-<ts>… filename (via RecordingName.parse).
@@ -271,8 +276,7 @@ final class LibraryStore {
             let list = try JSONDecoder().decode(ListResponse.self, from: data)
             let names = Set(list.files.map(\.name))
             let audios = list.files.filter {
-                let leaf = $0.name.components(separatedBy: "/").last ?? $0.name
-                return leaf.hasPrefix("VoiceDrop-") && leaf.hasSuffix(".m4a")
+                RecordingName.isRecordingFile($0.name.components(separatedBy: "/").last ?? $0.name)
             }
             recordings = audios.map {
                 let stem = String($0.name.dropLast(4))
@@ -386,8 +390,9 @@ final class LibraryStore {
     /// "no-credit" on any fetch or parse failure so callers always get a non-nil String.
     private func fetchBlockReason(_ stem: String) async -> String {
         guard let data = try? await get(Recording.blockedKey(forStem: stem)),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "no-credit" }
-        return obj["reason"] as? String ?? "no-credit"
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return BlockReason.noCredit.rawValue }
+        return obj["reason"] as? String ?? BlockReason.noCredit.rawValue
     }
 
     /// Delete a whole recording from R2: the audio plus every sidecar marker

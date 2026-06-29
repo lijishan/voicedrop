@@ -44,6 +44,12 @@ enum RecordingName {
         return Parsed(sessionTs: sessionTs, month: Int(p[2]), day: Int(p[3]), hhmm: hhmm, duration: duration, place: place)
     }
 
+    /// True if `name` is a finished recording file (`VoiceDrop-….m4a`). The ONE
+    /// predicate — was inlined (and slightly divergent) in LibraryStore + Uploader.
+    static func isRecordingFile(_ name: String) -> Bool {
+        name.hasPrefix("VoiceDrop-") && name.hasSuffix(".m4a")
+    }
+
     static func timestamp(_ d: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")

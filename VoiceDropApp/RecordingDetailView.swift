@@ -610,7 +610,7 @@ struct RecordingDetailView: View {
 
     private var currentTime: String { fmt(player.duration > 0 ? player.progress * player.duration : 0) }
     private var totalTime: String { player.duration > 0 ? fmt(player.duration) : (recording.durationLabel ?? "--:--") }
-    private func fmt(_ s: TimeInterval) -> String { let t = Int(s); return String(format: "%02d:%02d", t / 60, t % 60) }
+    private func fmt(_ s: TimeInterval) -> String { s.clockString }
 
     private func loadAndPlay() async {
         loadingAudio = true; defer { loadingAudio = false }
