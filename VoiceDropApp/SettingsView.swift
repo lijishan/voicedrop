@@ -518,6 +518,7 @@ struct WritingStyleSheet: View {
     @State private var showVersions = false
     @State private var selectedV: Int?     // version loaded in the editor; nil → head
     @State private var originalStyle = ""  // baseline at open; 保存 enables only on a real diff
+    @State private var prefs = Prefs.shared
 
     private var currentV: Int { selectedV ?? store.styleHead }
     private var versionsDesc: [StyleVersion] { store.styleVersions.reversed() }
@@ -526,6 +527,22 @@ struct WritingStyleSheet: View {
     private var canSave: Bool {
         let now = store.style.trimmingCharacters(in: .whitespacesAndNewlines)
         return !now.isEmpty && now != originalStyle.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // 多风格对比（设置侧 UI；选择存 Prefs。挖矿/阅读页暂未接入——本版只做选择）。
+    private var compareOn: Bool { prefs.compareStyles }
+    private var selectedVersions: [Int] { prefs.compareStyleVersions.sorted(by: >) }
+    private func toggleCompareSelect(_ v: Int) {
+        if let idx = prefs.compareStyleVersions.firstIndex(of: v) {
+            prefs.compareStyleVersions.remove(at: idx)
+        } else if prefs.compareStyleVersions.count < 3 {
+            prefs.compareStyleVersions.append(v)
+        }
+    }
+    private var compareFooter: String {
+        let vs = selectedVersions
+        let head = vs.isEmpty ? "勾选 2–3 个版本" : "完成后将分别用 " + vs.map { "v\($0)" }.joined(separator: "、")
+        return head + "，成文时各生成一篇，在阅读页顶部切换对比。最多选 3 个。"
     }
 
     var body: some View {
@@ -561,12 +578,17 @@ struct WritingStyleSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await store.saveStyle(); if store.error == nil { dismiss() } }
-                    } label: {
-                        if store.saving { ProgressView() } else { Text("保存").bold() }
+                    if compareOn {
+                        // 对比模式：选择已实时存入 Prefs，「完成」只收起。
+                        Button("完成") { dismiss() }.bold()
+                    } else {
+                        Button {
+                            Task { await store.saveStyle(); if store.error == nil { dismiss() } }
+                        } label: {
+                            if store.saving { ProgressView() } else { Text("保存").bold() }
+                        }
+                        .disabled(!canSave || store.saving)   // 只有真有改动才能保存
                     }
-                    .disabled(!canSave || store.saving)   // 只有真有改动才能保存
                 }
             }
             .task {
@@ -580,56 +602,92 @@ struct WritingStyleSheet: View {
     private var versionBar: some View {
         Button { withAnimation(.easeOut(duration: 0.15)) { showVersions.toggle() } } label: {
             HStack(spacing: 10) {
-                HStack(spacing: 6) {
-                    Text("v\(currentV)").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
-                    Image(systemName: showVersions ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                if compareOn {
+                    HStack(spacing: 6) {
+                        Image(systemName: "rectangle.split.2x1").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                        Text("对比").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                        Image(systemName: showVersions ? "chevron.up" : "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 6))
+                    Text(selectedVersions.isEmpty ? "未选版本" : "已选 " + selectedVersions.map { "v\($0)" }.joined(separator: "、"))
+                        .font(.system(size: 13)).foregroundStyle(Theme.secondary).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text("\(prefs.compareStyleVersions.count) / 3").font(.system(size: 13)).foregroundStyle(Theme.faint)
+                } else {
+                    HStack(spacing: 6) {
+                        Text("v\(currentV)").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
+                        Image(systemName: showVersions ? "chevron.up" : "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Theme.ink, in: RoundedRectangle(cornerRadius: 6))
+                    Text("\(store.style.count) 字").font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                    if let d = currentDate {
+                        Circle().fill(Theme.chevron).frame(width: 3, height: 3)
+                        Text(DateFormatter.zh("M月d日 HH:mm").string(from: d)).font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Text("共 \(store.styleVersions.count) 版").font(.system(size: 13)).foregroundStyle(Theme.faint)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Theme.ink, in: RoundedRectangle(cornerRadius: 6))
-                Text("\(store.style.count) 字").font(.system(size: 13)).foregroundStyle(Theme.secondary)
-                if let d = currentDate {
-                    Circle().fill(Theme.chevron).frame(width: 3, height: 3)
-                    Text(DateFormatter.zh("M月d日 HH:mm").string(from: d))
-                        .font(.system(size: 13)).foregroundStyle(Theme.secondary)
-                }
-                Spacer(minLength: 8)
-                Text("共 \(store.styleVersions.count) 版").font(.system(size: 13)).foregroundStyle(Theme.faint)
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
             .background(Theme.card, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(showVersions ? Theme.ink : Theme.inputBorder, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke((showVersions || compareOn) ? Theme.ink : Theme.inputBorder, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
     private var versionDropdown: some View {
         VStack(spacing: 0) {
+            // 多风格对比 开关
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("多风格对比").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.ink)
+                    Text("勾选多个版本，成文时各生成一篇并排挑").font(.system(size: 12)).foregroundStyle(Theme.faint)
+                }
+                Spacer(minLength: 8)
+                Toggle("", isOn: Binding(get: { prefs.compareStyles }, set: { prefs.compareStyles = $0 }))
+                    .labelsHidden().tint(Theme.accent)
+            }
+            .padding(.horizontal, 15).padding(.vertical, 11).background(Theme.appBG)
+            Rectangle().fill(Theme.dividerInCard).frame(height: 1)
+
             ForEach(Array(versionsDesc.enumerated()), id: \.element.id) { i, ver in
-                let isCurrent = ver.v == currentV
+                let sel = compareOn ? prefs.compareStyleVersions.contains(ver.v) : (ver.v == currentV)
                 Button {
-                    store.style = ver.style
-                    selectedV = ver.v
-                    withAnimation(.easeOut(duration: 0.15)) { showVersions = false }
+                    if compareOn { toggleCompareSelect(ver.v) }
+                    else {
+                        store.style = ver.style; selectedV = ver.v
+                        withAnimation(.easeOut(duration: 0.15)) { showVersions = false }
+                    }
                 } label: {
                     HStack(spacing: 8) {
                         Text("v\(ver.v)").font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(isCurrent ? Theme.accent : Theme.ink).frame(width: 40, alignment: .leading)
-                        Text("\(ver.charCount) 字").font(.system(size: 13))
-                            .foregroundStyle(isCurrent ? Theme.accent : Theme.secondary)
+                            .foregroundStyle(sel ? Theme.accent : Theme.ink).frame(width: 40, alignment: .leading)
+                        Text("\(ver.charCount) 字").font(.system(size: 13)).foregroundStyle(sel ? Theme.accent : Theme.secondary)
                         Spacer(minLength: 8)
-                        Text(DateFormatter.zh("M月d日").string(from: ver.date))
-                            .font(.system(size: 13)).foregroundStyle(Theme.faint)
-                        if isCurrent {
+                        Text(DateFormatter.zh("M月d日").string(from: ver.date)).font(.system(size: 13)).foregroundStyle(Theme.faint)
+                        if compareOn {
+                            RoundedRectangle(cornerRadius: 5).fill(sel ? Theme.accent : Color.clear).frame(width: 20, height: 20)
+                                .overlay(RoundedRectangle(cornerRadius: 5).stroke(sel ? Theme.accent : Theme.inputBorder, lineWidth: 1.5))
+                                .overlay(sel ? Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white) : nil)
+                        } else if sel {
                             Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.accent)
                         }
                     }
                     .padding(.horizontal, 15).padding(.vertical, 12)
-                    .background(isCurrent ? Theme.accentSoft : Theme.card)
+                    .background(sel ? Theme.accentSoft : Theme.card)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 if i < versionsDesc.count - 1 { Rectangle().fill(Theme.dividerInCard).frame(height: 1) }
+            }
+
+            if compareOn {
+                Rectangle().fill(Theme.dividerInCard).frame(height: 1)
+                Text(compareFooter).font(.system(size: 12)).foregroundStyle(Theme.faint).lineSpacing(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 15).padding(.vertical, 11).background(Theme.appBG)
             }
         }
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 10))

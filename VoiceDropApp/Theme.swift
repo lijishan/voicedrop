@@ -148,10 +148,16 @@ final class Prefs {
     var deleteLocalAfterUpload: Bool { didSet { d.set(deleteLocalAfterUpload, forKey: "pref.deleteLocal") } }
     var highQuality: Bool { didSet { d.set(highQuality, forKey: "pref.highQuality") } }
 
+    // 多风格对比（设置侧 UI；选中的文风版本号，最多 3 个）。挖矿/阅读页暂未接入。
+    var compareStyles: Bool { didSet { d.set(compareStyles, forKey: "pref.compareStyles") } }
+    var compareStyleVersions: [Int] { didSet { d.set(compareStyleVersions, forKey: "pref.compareStyleVersions") } }
+
     private init() {
         iCloudBackup = d.object(forKey: "pref.iCloudBackup") as? Bool ?? true
         deleteLocalAfterUpload = d.object(forKey: "pref.deleteLocal") as? Bool ?? true
         highQuality = d.object(forKey: "pref.highQuality") as? Bool ?? false
+        compareStyles = d.object(forKey: "pref.compareStyles") as? Bool ?? false
+        compareStyleVersions = (d.array(forKey: "pref.compareStyleVersions") as? [Int]) ?? []
     }
 
     /// AVAudioRecorder settings, tuned for SPEECH → ASR (not music). The audio is only
