@@ -110,23 +110,39 @@ enum ArticleBody {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // A leading version-origin comment, e.g. `<!--风格v7-->`. A GENERAL per-version label:
-    // any version can self-describe its origin in this comment; the reader shows it on the
-    // undo/redo chip and strips it from every rendered surface.
-    private static let originComment = try! NSRegularExpression(pattern: #"<!--\s*(.*?)\s*-->"#)
+    // Per-version body comment protocol: `<!-- key: value -->`, extensible (mirrors the
+    // server's style-store.js). First key `style` → the chip label ("风格 v8"). Any version
+    // self-describes via these comments; the reader shows them and strips them from every
+    // rendered surface. Future per-version UI just adds another key.
+    private static let metaComment = try! NSRegularExpression(pattern: #"<!--\s*([A-Za-z][\w-]*)\s*:\s*(.*?)\s*-->"#)
+    private static let anyComment  = try! NSRegularExpression(pattern: #"<!--.*?-->"#, options: [.dotMatchesLineSeparators])
 
-    /// The origin label from a body's `<!--…-->` comment (e.g. "风格v7"), or nil.
-    static func versionLabel(_ body: String) -> String? {
+    /// Parse `<!-- key: value -->` comments into a dict (last value wins per key).
+    static func meta(_ body: String) -> [String: String] {
         let ns = body as NSString
-        guard let m = originComment.firstMatch(in: body, range: NSRange(location: 0, length: ns.length)) else { return nil }
-        let s = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-        return s.isEmpty ? nil : s
+        var out: [String: String] = [:]
+        for m in metaComment.matches(in: body, range: NSRange(location: 0, length: ns.length)) {
+            let k = ns.substring(with: m.range(at: 1))
+            let v = ns.substring(with: m.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty { out[k] = v }
+        }
+        return out
     }
 
-    /// Body with the origin `<!--…-->` comment(s) removed (label is metadata, never shown).
+    /// The `style` comment value (chip label, e.g. "风格 v8"), or nil.
+    static func styleLabel(_ body: String) -> String? { meta(body)["style"] }
+    /// The canonical chip label for a 文风 version number — single source the matcher uses too.
+    static func styleLabel(forVersion v: Int) -> String { "风格 v\(v)" }
+    /// The 文风 version number tagged on a body's `style` comment (e.g. "风格 v8" → 8), or nil.
+    static func styleVersion(_ body: String) -> Int? {
+        guard let s = styleLabel(body), let r = s.range(of: #"\d+"#, options: .regularExpression) else { return nil }
+        return Int(s[r])
+    }
+
+    /// Body with ALL `<!--…-->` comments removed (metadata, never shown).
     static func stripOriginComment(_ body: String) -> String {
         let ns = body as NSString
-        return originComment.stringByReplacingMatches(
+        return anyComment.stringByReplacingMatches(
             in: body, range: NSRange(location: 0, length: ns.length), withTemplate: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -546,6 +562,24 @@ final class LibraryStore {
             if errcode == nil && errmsg == nil { return nil }
             return errmsg.map { "发布失败：\($0)" } ?? "发布失败"
         }
+    }
+
+    /// Re-mine this article with 文风 version `styleV` (POST /agent/restyle). Server writes
+    /// a new tagged article version and moves head; returns the new head, nil on failure.
+    /// Caller only invokes this when that variant isn't already in versions[] (else patchHead).
+    func restyle(_ rec: Recording, styleV: Int) async -> Int? {
+        guard !token.isEmpty, let url = URL(string: "\(API.agentBase.absoluteString)/restyle") else { return nil }
+        struct Req: Encodable { let stem: String; let styleV: Int }
+        struct Resp: Decodable { let ok: Bool; let head: Int? }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setBearer(token)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONEncoder().encode(Req(stem: rec.stem, styleV: styleV))
+        req.timeoutInterval = 120   // a mine LLM call can take a while
+        guard let (data, resp) = try? await URLSession.shared.data(for: req), resp.isOK,
+              let r = try? JSONDecoder().decode(Resp.self, from: data), r.ok else { return nil }
+        return r.head
     }
 
     /// Upload a square JPEG to the user's photo folder and return the relative key.

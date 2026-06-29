@@ -45,6 +45,8 @@ struct RecordingDetailView: View {
     @State private var connected = false
     @State private var confirmDeleteFromDetail = false
     @State private var showingInsertPhoto = false
+    @State private var showRestyle = false       // 换风格重写 sheet
+    @State private var restyling = false         // /agent/restyle in flight
 
     // Undo/redo: versions (oldest-first) + head loaded on open and refreshed after
     // each agent edit. Undo/redo move head locally for instant UI update, then
@@ -62,54 +64,69 @@ struct RecordingDetailView: View {
 
     private var articles: [MinedArticle] { doc?.resolvedArticles ?? [] }
 
-    /// Origin label of the current version, e.g. "风格v7", parsed from the body's
-    /// `<!--…-->` comment. Only shown when there's more than one version to switch among.
-    private var currentVersionLabel: String? {
-        guard versions.count > 1, let body = articles.first?.body else { return nil }
-        return ArticleBody.versionLabel(body)
+    /// The `style` chip label of the current article (e.g. "风格 v8"), from the body's
+    /// `<!-- style: … -->` comment. nil → no chip (legacy / no-style articles).
+    private var currentStyleLabel: String? {
+        guard let body = articles.first?.body else { return nil }
+        return ArticleBody.styleLabel(body)
     }
-    /// (current, total) position of the active version, 1-based. nil if ≤1 version.
-    private var versionPos: (Int, Int)? {
-        guard versions.count > 1, let i = versions.firstIndex(where: { $0.v == head }) else { return nil }
-        return (i + 1, versions.count)
+    private var currentStyleV: Int? {
+        guard let body = articles.first?.body else { return nil }
+        return ArticleBody.styleVersion(body)
+    }
+    /// A version already tagged with 文风 vN (the latest such) → reuse via patchHead, free.
+    private func existingVersion(forStyle v: Int) -> ArticleVersionEntry? {
+        versions.last { ArticleBody.styleVersion($0.articles.first?.body ?? "") == v }
     }
 
-    /// Top-of-article hint row when there are multiple versions: the current 风格 badge
-    /// plus an inline 撤销/重做 switcher that MIRRORS the two nav-bar buttons (same icons,
-    /// same enabled colors) — so users discover that those top-right arrows switch styles.
-    /// The mini buttons are themselves functional.
-    private var versionSwitchHint: some View {
-        HStack(spacing: 8) {
-            if let label = currentVersionLabel {
-                HStack(spacing: 5) {
-                    Image(systemName: "sparkles").font(.system(size: 10))
-                    Text(label).font(.system(size: 12, weight: .semibold))
-                }
-                .foregroundStyle(Theme.accent)
-                .padding(.horizontal, 9).padding(.vertical, 4)
-                .background(Theme.accentSoft, in: Capsule())
+    /// Tappable chip on the meta line — opens 换风格重写. Shows the current 风格 vN.
+    private var styleChip: some View {
+        Button { showRestyle = true } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "pencil").font(.system(size: 10, weight: .semibold))
+                Text(currentStyleLabel ?? "选风格").font(.system(size: 12, weight: .semibold))
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.accent.opacity(0.55))
             }
-            Spacer(minLength: 8)
-            Text("切换风格").font(.system(size: 11)).foregroundStyle(Theme.metaRead)
-            miniSwitch("arrow.uturn.backward", enabled: canUndo) { performUndo() }
-            miniSwitch("arrow.uturn.forward",  enabled: canRedo) { performRedo() }
-            if let p = versionPos {
-                Text("\(p.0)/\(p.1)").font(.system(size: 11, weight: .medium))
-                    .monospacedDigit().foregroundStyle(Theme.metaRead)
+            .foregroundStyle(Theme.accent)
+            .padding(.leading, 9).padding(.trailing, 9).padding(.vertical, 4)
+            .background(Theme.accentSoft, in: Capsule())
+            .overlay(Capsule().stroke(Theme.accent.opacity(0.28), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Switch the article to 文风 vN: reuse an existing tagged version (free patchHead),
+    /// else re-mine via /agent/restyle (a new version). "原文不变，可随时换回."
+    private func applyStyle(_ v: Int) {
+        if let entry = existingVersion(forStyle: v) {
+            head = entry.v; applyVersion(entry)
+            Task { await store.patchHead(recording, head: entry.v) }
+            return
+        }
+        Task {
+            restyling = true
+            if let _ = await store.restyle(recording, styleV: v) {
+                doc = await store.fetchDoc(recording)
+                articleIndex = 0
+                await loadVersionHistory()
+            } else {
+                toast = "重写失败，稍后再试"
             }
+            restyling = false
         }
     }
-    /// One mini arrow button — visually identical to a nav-bar undo/redo button, scaled down.
-    private func miniSwitch(_ symbol: String, enabled: Bool, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(enabled ? Color(hex: "3A352E") : Color(hex: "C9BFB0"))
-                .frame(width: 28, height: 25)
-                .background(Theme.card, in: RoundedRectangle(cornerRadius: 7))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.borderRead, lineWidth: 1))
+
+    private var restylingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.12).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView().tint(Theme.accent)
+                Text("正在用新风格重写…").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.ink)
+            }
+            .padding(.horizontal, 26).padding(.vertical, 22)
+            .background(Theme.card, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.borderChrome, lineWidth: 1))
         }
-        .buttonStyle(.plain).disabled(!enabled)
     }
 
     var body: some View {
@@ -129,6 +146,11 @@ struct RecordingDetailView: View {
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .bottom) { if !articles.isEmpty { voiceBar } }
         .overlay(alignment: .bottom) { toastView }
+        .overlay { if restyling { restylingOverlay } }
+        .sheet(isPresented: $showRestyle) {
+            RestyleSheet(versions: settings.styleVersions, currentStyleV: currentStyleV) { v in applyStyle(v) }
+                .presentationDetents([.medium, .large])
+        }
         .task {
             if recording.isEmpty {
                 emptyReason = await store.fetchEmptyReason(recording)
@@ -138,6 +160,7 @@ struct RecordingDetailView: View {
             loadingDoc = false
             published = doc?.hasWechatDraft ?? false
             await settings.loadWechat()
+            await settings.loadStyleHistory()   // for the 换风格 sheet
             await connectIfNeeded()
             if !articles.isEmpty {
                 communityShareId = await community.sharedShareId(recording)
@@ -465,15 +488,19 @@ struct RecordingDetailView: View {
         // 整条播放条已收进顶部播放键，正文直接上移、阅读区更大。
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                if versions.count > 1 { versionSwitchHint.padding(.top, 12) }
                 if let a = articles[safe: articleIndex] {
                     Text(a.title)
                         .font(.system(size: 23, weight: .semibold)).foregroundStyle(Theme.inkRead)
                         .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 14)
-                    Text(recording.displayTitle)
-                        .font(.system(size: 13)).foregroundStyle(Theme.metaRead)
-                        .padding(.top, 8)
+                    // 时间 + 风格 chip 同一行（去掉了原来重复标题的内容）
+                    HStack(spacing: 10) {
+                        if let dt = recording.dateTimeLabel {
+                            Text(dt).font(.system(size: 13)).foregroundStyle(Theme.metaRead)
+                        }
+                        if currentStyleLabel != nil { styleChip }
+                    }
+                    .padding(.top, 8)
 
                     if articles.count > 1 { chipRow.padding(.top, 16) }
 
@@ -1027,4 +1054,94 @@ struct ShareSheet: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - 换个风格重写 (per Player Edit Toolbar.dc.html, screen ③)
+
+/// Pick a 文风 version to rewrite the current article with. "原文不变，可随时换回."
+/// onUse(v): the detail view reuses an existing tagged version (free) or calls /agent/restyle.
+struct RestyleSheet: View {
+    let versions: [StyleVersion]      // 文风 versions, oldest-first
+    let currentStyleV: Int?           // the article's current style version (if tagged)
+    let onUse: (Int) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected: Int?
+
+    private var pick: Int? { selected ?? currentStyleV }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("换个风格重写").font(.system(size: 19, weight: .semibold)).foregroundStyle(Theme.ink)
+                    Text("选一个范文版本，把本文重写一遍。原文不变，可随时换回。")
+                        .font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.top, 6).padding(.bottom, 12)
+
+                if versions.isEmpty {
+                    Spacer()
+                    Text("还没有写作风格版本。\n先去设置 → 写作风格里保存一份。")
+                        .font(.system(size: 14)).foregroundStyle(Theme.faint).multilineTextAlignment(.center)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            ForEach(versions.reversed()) { ver in row(ver) }
+                        }
+                        .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 8)
+                    }
+                    bottomButton.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 10)
+                }
+            }
+            .background(Theme.appBG.ignoresSafeArea())
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("取消") { dismiss() } } }
+        }
+    }
+
+    private func row(_ ver: StyleVersion) -> some View {
+        let isPick = pick == ver.v
+        return Button { selected = ver.v } label: {
+            HStack(spacing: 12) {
+                Text("v\(ver.v)").font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(isPick ? Theme.accent : Theme.ink).frame(width: 38, alignment: .leading)
+                HStack(spacing: 6) {
+                    Text("\(ver.charCount) 字 · \(DateFormatter.zh("M月d日").string(from: ver.date))")
+                        .font(.system(size: 13)).foregroundStyle(isPick ? Theme.accent : Theme.secondary)
+                    if ver.v == currentStyleV {
+                        Text("当前").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 6).padding(.vertical, 1).background(Theme.accentSoft, in: Capsule())
+                    }
+                }
+                Spacer(minLength: 8)
+                ZStack {
+                    Circle().fill(isPick ? Theme.accent : .clear).frame(width: 21, height: 21)
+                    Circle().stroke(isPick ? Theme.accent : Theme.inputBorder, lineWidth: 1.6).frame(width: 21, height: 21)
+                    if isPick { Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white) }
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 13)
+            .background(isPick ? Theme.accentSoft : Theme.card, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(isPick ? Theme.accent : Theme.inputBorder, lineWidth: isPick ? 1.5 : 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var bottomButton: some View {
+        Button {
+            if let p = pick { onUse(p); dismiss() }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 15, weight: .semibold))
+                Text(pick.map { "用 v\($0) 重写本文" } ?? "选一个版本")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .foregroundStyle(.white).frame(maxWidth: .infinity).padding(.vertical, 15)
+            .background(pick == nil ? Theme.accent.opacity(0.4) : Theme.accent, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain).disabled(pick == nil)
+    }
 }
