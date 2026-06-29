@@ -150,8 +150,17 @@ struct Recording: Identifiable, Hashable {
         return place.isEmpty ? stem : place
     }
 
-    /// Second line of a list row: "6月18日 14:30" parsed from the filename.
+    /// Second line of a list row: "6月18日 14:30" from the R2 upload time, shown in
+    /// the device's LOCAL timezone (uploaded is ISO-8601 UTC). The filename's embedded
+    /// timestamp isn't a reliable clock, so prefer `uploaded`; fall back to the name
+    /// only when `uploaded` is missing/unparseable.
     var dateTimeLabel: String? {
+        if let d = Recording.uploadedDate(uploaded) { return Recording.dtFmt.string(from: d) }
+        return nameDateTimeLabel
+    }
+
+    /// Legacy fallback: parse "6月18日 14:30" out of the VoiceDrop-<ts>… filename.
+    private var nameDateTimeLabel: String? {
         let p = stem.components(separatedBy: "-")
         guard p.count >= 5, p[0] == "VoiceDrop", p[1].count == 4 else { return nil }
         var bits: [String] = []
@@ -162,6 +171,19 @@ struct Recording: Identifiable, Hashable {
         }
         return bits.isEmpty ? nil : bits.joined(separator: " ")
     }
+
+    /// Parse R2's ISO-8601 `uploaded` (with or without fractional seconds) into a Date.
+    static func uploadedDate(_ s: String) -> Date? {
+        guard !s.isEmpty else { return nil }
+        return isoFrac.date(from: s) ?? isoPlain.date(from: s)
+    }
+    private static let isoFrac: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
+    }()
+    private static let isoPlain = ISO8601DateFormatter()   // default = .withInternetDateTime (no fraction)
+    private static let dtFmt: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f
+    }()   // no explicit timeZone → device local (UTC+8 for the user)
 
     /// "0m33s"-style duration field if present.
     var durationLabel: String? {
@@ -227,7 +249,11 @@ final class LibraryStore {
                                  hasArticles: names.contains("articles/\(stem).json"),
                                  isEmpty: names.contains("articles/\(stem).empty"))
             }
-            .sorted { $0.audioName > $1.audioName }   // newest first (timestamped names)
+            // Newest first by ACTUAL time. The filename's embedded timestamp isn't a
+            // reliable clock (clock skew, staging/promotion, imported/renamed takes), so
+            // sort by R2 `uploaded` — an ISO-8601 UTC string, lexicographically ==
+            // chronologically. Fall back to the name only when `uploaded` ties/missing.
+            .sorted { ($0.uploaded, $0.audioName) > ($1.uploaded, $1.audioName) }
 
             // Fetch block reasons (.blocked marker) for recordings the worker couldn't mine.
             // .json / .empty take precedence — only fetch when neither is present.
