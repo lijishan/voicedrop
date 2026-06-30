@@ -1107,13 +1107,17 @@ struct RestyleSheet: View {
             HStack(spacing: 12) {
                 Text("v\(ver.v)").font(.system(size: 15, weight: .bold))
                     .foregroundStyle(isPick ? Theme.accent : Theme.ink).frame(width: 38, alignment: .leading)
-                HStack(spacing: 6) {
-                    Text("\(ver.charCount) 字 · \(DateFormatter.zh("M月d日").string(from: ver.date))")
-                        .font(.system(size: 13)).foregroundStyle(isPick ? Theme.accent : Theme.secondary)
-                    if ver.v == currentStyleV {
-                        Text("当前").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.accent)
-                            .padding(.horizontal, 6).padding(.vertical, 1).background(Theme.accentSoft, in: Capsule())
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(ver.displayName).font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(isPick ? Theme.accent : Theme.ink).lineLimit(1)
+                        if ver.v == currentStyleV {
+                            Text("当前").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.accent)
+                                .padding(.horizontal, 6).padding(.vertical, 1).background(Theme.accentSoft, in: Capsule())
+                        }
                     }
+                    Text("\(ver.charCount) 字 · \(DateFormatter.zh("M月d日").string(from: ver.date))")
+                        .font(.system(size: 12)).foregroundStyle(isPick ? Theme.accent.opacity(0.8) : Theme.secondary)
                 }
                 Spacer(minLength: 8)
                 ZStack {

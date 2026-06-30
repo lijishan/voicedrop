@@ -13,6 +13,17 @@ private enum ArticlesLinkError: LocalizedError {
     }
 }
 
+/// 版本名 = 文风正文的第一行，用来区分各个版本（比纯 vN 好认）。
+/// 取第一行、最多 12 字，超出截断加省略号；界面上再用 lineLimit(1) 兜底自动收尾。
+enum StyleNaming {
+    static func name(_ style: String, max: Int = 12) -> String {
+        let line = style.split(whereSeparator: \.isNewline).first
+            .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        guard !line.isEmpty else { return "" }
+        return line.count > max ? String(line.prefix(max)) + "…" : line
+    }
+}
+
 /// One saved 文风 version (from GET /style/history). `savedAt` is epoch ms.
 struct StyleVersion: Identifiable, Decodable {
     let v: Int
@@ -21,6 +32,8 @@ struct StyleVersion: Identifiable, Decodable {
     var id: Int { v }
     var charCount: Int { style.count }
     var date: Date { Date(timeIntervalSince1970: savedAt / 1000) }
+    /// 版本名：正文首行，最多 12 字（见 StyleNaming）。空文风 → 空串。
+    var displayName: String { StyleNaming.name(style) }
 }
 
 /// Per-user writing identity, stored on the server as users/<sub>/CLAUDE.md, plus
@@ -724,7 +737,9 @@ struct WritingStyleSheet: View {
                     }
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(Theme.ink, in: RoundedRectangle(cornerRadius: 6))
-                    Text("\(store.style.count) 字").font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                    Text(StyleNaming.name(store.style)).font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.ink).lineLimit(1)
+                    Text("\(store.style.count) 字").font(.system(size: 13)).foregroundStyle(Theme.secondary).layoutPriority(1)
                     if let d = currentDate {
                         Circle().fill(Theme.chevron).frame(width: 3, height: 3)
                         Text(DateFormatter.zh("M月d日 HH:mm").string(from: d)).font(.system(size: 13)).foregroundStyle(Theme.secondary)
@@ -769,9 +784,11 @@ struct WritingStyleSheet: View {
                     HStack(spacing: 8) {
                         Text("v\(ver.v)").font(.system(size: 15, weight: .bold))
                             .foregroundStyle(sel ? Theme.accent : Theme.ink).frame(width: 40, alignment: .leading)
-                        Text("\(ver.charCount) 字").font(.system(size: 13)).foregroundStyle(sel ? Theme.accent : Theme.secondary)
+                        Text(ver.displayName).font(.system(size: 14, weight: sel ? .semibold : .regular))
+                            .foregroundStyle(sel ? Theme.accent : Theme.ink).lineLimit(1)
                         Spacer(minLength: 8)
-                        Text(DateFormatter.zh("M月d日").string(from: ver.date)).font(.system(size: 13)).foregroundStyle(Theme.faint)
+                        Text("\(ver.charCount) 字 · \(DateFormatter.zh("M月d日").string(from: ver.date))")
+                            .font(.system(size: 12)).foregroundStyle(Theme.faint).lineLimit(1)
                         if compareOn {
                             RoundedRectangle(cornerRadius: 5).fill(sel ? Theme.accent : Color.clear).frame(width: 20, height: 20)
                                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(sel ? Theme.accent : Theme.inputBorder, lineWidth: 1.5))
