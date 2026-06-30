@@ -33,6 +33,8 @@ final class SettingsStore {
     var styleVersions: [StyleVersion] = []   // oldest-first, from /style/history
     var styleHead = 0
     var serverStyles: [Int] = []   // profile.styles (多风格对比 selection) from GET /style
+    var suanliBalance: Double = 0  // 算力余额，给设置主列表「算力」行显示
+    var suanliLoaded = false
     var loading = false
     var saving = false
     var saved = false
@@ -73,6 +75,18 @@ final class SettingsStore {
                 error = "加载失败"
             }
         } catch { self.error = error.localizedDescription }
+    }
+
+    /// Fetch 算力余额 for the 设置 list row (best-effort; the 算力 detail page reloads its own).
+    func loadBalance() async {
+        guard !token.isEmpty else { return }
+        struct B: Decodable { let suanli: Double }
+        guard let url = URL(string: "\(API.agentBase.absoluteString)/usage/balance") else { return }
+        var req = URLRequest(url: url); req.setBearer(token)
+        if let (data, resp) = try? await URLSession.shared.data(for: req), resp.isOK,
+           let b = try? JSONDecoder().decode(B.self, from: data) {
+            suanliBalance = b.suanli; suanliLoaded = true
+        }
     }
 
     /// Fetch the 文风 version history (newest-first after load). Best-effort.
@@ -409,6 +423,22 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                         settingsRowDivider
+                        NavigationLink { UsageView() } label: {
+                            SettingsRow(tileBG: Theme.amberSoft, symbol: "bolt.fill", tileFG: Theme.amber,
+                                        title: "算力",
+                                        subtitle: store.suanliLoaded
+                                            ? "约可成文 \(Suanli.articles(store.suanliBalance)) 篇"
+                                            : "余额与消耗明细") {
+                                HStack(spacing: 8) {
+                                    if store.suanliLoaded {
+                                        Text("\(Int(store.suanliBalance.rounded()))")
+                                            .font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.amber)
+                                    }
+                                    settingsChevron
+                                }
+                            }
+                        }.buttonStyle(.plain)
+                        settingsRowDivider
                         Button { showStyle = true } label: {
                             SettingsRow(tileBG: Theme.tileNeutral, symbol: "pencil", tileFG: Theme.secondary,
                                         title: "写作风格", subtitle: "成文时模仿这套语气") { settingsChevron }
@@ -466,7 +496,7 @@ struct SettingsView: View {
         }
         .background(Theme.appBG.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .task { await store.load(); await store.loadWechat(); await store.loadConfig() }
+        .task { await store.load(); await store.loadWechat(); await store.loadConfig(); await store.loadBalance() }
         .sheet(isPresented: $showWechat) { WechatSettingsSheet(store: store) }
         .sheet(isPresented: $showStyle) { WritingStyleSheet(store: store) }
         .sheet(isPresented: $showingExport, onDismiss: { exportManager.reset() }) {

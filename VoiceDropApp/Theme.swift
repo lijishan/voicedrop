@@ -49,6 +49,10 @@ enum Theme {
     static let recordRedSoft  = Color(hex: "FBEAE7")   // 列表波形块底
     static let greenDone      = Color(hex: "5E8A6A")
     static let amberPending   = Color(hex: "C98A3C")
+    static let amber          = Color(hex: "C98A2E")   // 算力（lightning / 数字）
+    static let amberSoft      = Color(hex: "FBEAD2")   // 算力 tile / chip 底
+    static let inkHeroTop     = Color(hex: "2A2521")   // 算力余额 hero 渐变
+    static let inkHeroBot     = Color(hex: "3A332A")
 
     // WeChat connected banner
     static let okBannerBG     = Color(hex: "EAF1EC")
