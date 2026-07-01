@@ -256,7 +256,8 @@ struct PhotoComposeView: View {
 
         let date = Date()
         let sessionTs = RecordingName.timestamp(date)
-        let audioName = RecordingName.make(start: date, duration: 1, place: nil)
+        // duration 0 → 文件名标 …-0m0s-…，服务端 miner 见 0 秒直接跳过 ASR（省火山一趟）。
+        let audioName = RecordingName.make(start: date, duration: 0, place: nil)
 
         // Encode + upload each photo FIRST. Square-crop/JPEG-encode runs
         // `Task.detached` per image (like Task 8's off-main doc-parse fix) so
