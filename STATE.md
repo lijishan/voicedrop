@@ -14,7 +14,7 @@ public web preview of any article.
 | Repo | Path | What | Deploy |
 |---|---|---|---|
 | voicedrop | `~/code/voicedrop` | iOS app (SwiftUI) + WeChat publish relay (`mining/relay_server.py`) + CI | push `main` → GitHub Actions `Build & Deploy` → **TestFlight** (fastlane). App Store submit = manual `appstore` workflow_dispatch → `fastlane release skip_build:true`. |
-| jianshuo.dev | `~/code/jianshuo.dev` | Cloudflare **Pages** project `jianshuo-dev`: files API + public article page, backed by R2 bucket `jianshuo-dev-files` (binding `FILES`) | **manual** `npx wrangler pages deploy . --project-name jianshuo-dev` (not git-triggered) |
+| jianshuo.dev | `~/code/jianshuo.dev` | Cloudflare **Pages** project `jianshuo-dev`: files API + public article page, backed by R2 bucket `jianshuo-dev-files` (binding `FILES`) | **manual** `npx wrangler pages deploy . --project-name jianshuo-dev --branch main` (not git-triggered; **must pass `--branch main`** or a detached-HEAD deploy silently lands in a Preview, not production — see 部署坑 2) |
 | voicedrop-agent | `~/code/jianshuo.dev/agent` | Cloudflare **Worker** (Durable Objects; Pages can't host them) on route `jianshuo.dev/agent/*`: live article editing + real-time status. Same R2 `FILES` + `SESSION_SECRET` as Pages. | **manual** `cd ~/code/jianshuo.dev/agent && npx wrangler deploy` |
 | claude-skills | `~/code/claude-skills/wjs-mining-voicedrop` | the Mac-side mining skill (WeChat drafts) | commit on `main`; publish hook syncs `wjs-*` to public repo |
 
@@ -358,9 +358,9 @@ Spec/计划：`docs/superpowers/specs/2026-06-27-voicedrop-usage-billing-design.
 - **iOS**：`UsageView.swift`（算力余额 + 明细 + "无现金价值"说明，从 `/agent/usage/balance|ledger` 读）；入口在 `AccountView.swift` 账户卡；
   `Library.swift`/`LibraryView.swift` 加 `.blocked` 检测 → 徽标 **余额不足 / 录音过长**（`.json/.empty` 优先）；`AgentSession.swift` 把编辑错误送进 `replyBubble`。
 - **admin 账本页**：`voicedrop/admin/usage.html`（贴 admin token 看全量余额/消费，仿 `mine.html`）。
-- **部署**：worker `cd ~/code/jianshuo.dev/agent && npx wrangler deploy`；Pages `cd ~/code/jianshuo.dev && npx wrangler pages deploy . --project-name jianshuo-dev`。
-  ⚠️ **Pages 部署坑**：根目录有 `.claude/worktrees/*/node_modules`(>25MiB) 会让 `pages deploy .` 报错，且 `.assetsignore` 当前匹配不到深层 node_modules。
-  解法：从 main 的**干净临时 worktree** 部署（`git worktree add --detach <tmp> main` → 在里面 `pages deploy .`），只传已提交内容。`.assetsignore`（排除 `reco/`+`node_modules`）**必须存在**，别误删。
+- **部署**：worker `cd ~/code/jianshuo.dev/agent && npx wrangler deploy`；Pages `cd ~/code/jianshuo.dev && npx wrangler pages deploy . --project-name jianshuo-dev --branch main`。
+  ⚠️ **Pages 部署坑 1（node_modules）**：根目录有 `.claude/worktrees/*/node_modules`(>25MiB) 会让 `pages deploy .` 报错，且 `.assetsignore` 当前匹配不到深层 node_modules。解法：从 main 的**干净临时 worktree** 部署（`git worktree add --detach <tmp> main` → 在里面 `pages deploy .`），只传已提交内容。`.assetsignore`（排除 `reco/`+`node_modules`）**必须存在**，别误删。
+  ⚠️ **Pages 部署坑 2（PREVIEW 而非 PRODUCTION，2026-07-01 踩过）**：`jianshuo-dev` 是 direct-upload 项目，生产分支 = `main`。`wrangler pages deploy` 按**当前 git 分支名**决定环境——从 `--detach` 的**游离 HEAD** worktree 部署，分支名是 `HEAD` → **静默部到 Preview（别名 head.jianshuo-dev.pages.dev）**，`jianshuo.dev` 生产不更新！症状：新 Function 路由带 token 返 **405**（落到老代码兜底），无 token 返 401（老代码也有鉴权，迷惑）。**必须显式加 `--branch main`**（或在非游离、真 checkout 到 main 的 worktree 里部）。验证：`npx wrangler pages deployment list --project-name jianshuo-dev | grep Production` 第一行 Source 应是你刚部的 commit；`curl` 生产带合成 anon token 应 200。
 - **后续可做的小优化（非阻断，已记 `.superpowers/sdd/progress.md`）**：iOS `Entry.id=ts` 同秒可撞（改用 ledger 自增 id）；`fetchBlockReason` 串行可并行；usage 路由测试可补全；负 grant 语义。
 
 ## iOS app (`VoiceDropApp/`)
