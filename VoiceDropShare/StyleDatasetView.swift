@@ -304,9 +304,19 @@ struct StyleDatasetView: View {
     private func extract() async {
         guard collectedCount > 0, !extracting else { return }
         extracting = true
-        let ok = await ShareAPI.extractStyle(clearAfter: clearAfter)
+        // 走挖矿任务流（和录音/图片同一套）：上传一个静音占位 .m4a，文件名尾 token 打
+        // `TaskStyleExtract`（clearAfter 时不带 Keep），触发 miner → 服务端 classifyKey 认出这是
+        // 任务、不是普通录音 → 读语料蒸馏 → 在「我的录音」里像普通录音一样显示进度、产出
+        // 「写作风格介绍」文章。类型 tag 就在文件名里（和 VoiceDrop-style-/VoiceDrop-mine- 同一
+        // 机制，没有第二个文件）。比原来的同步 HTTP 蒸馏稳、有进度、能重试。
+        let place = clearAfter ? "TaskStyleExtract" : "TaskStyleExtract-Keep"
+        let name = RecordingName.make(start: Date(), duration: 0, place: place)   // …-0m0s-…-TaskStyleExtract.m4a
+        let okAudio = await ShareAPI.putData(SilentAudio.data, name: name, contentType: "audio/mp4")
         extracting = false
-        if ok { openApp() } else { extractFailed = true }   // 成功 → 跳「我的录音」看进度
+        if okAudio {
+            await ShareAPI.triggerMine()
+            openApp()   // 跳「我的录音」看进度
+        } else { extractFailed = true }
     }
 }
 
