@@ -20,6 +20,7 @@ struct LibraryView: View {
     @State private var selectedRec: Recording?
     @State private var selectedPost: CommunityPost?
     @State private var confirmUnshare: CommunityPost?
+    @EnvironmentObject private var router: AppRouter
     @Environment(\.scenePhase) private var scenePhase
 
     /// Local takes still uploading (top) + just-uploaded optimistic 待处理 +
@@ -101,11 +102,29 @@ struct LibraryView: View {
             statusSession.connect()
             Task { await refresh() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .vdOpenRecordings)) { _ in
-            // Opened from the Share Extension after 生成文章 — land on 我的录音 and
-            // refresh so the just-uploaded 待处理 row shows with live progress.
-            tab = .recordings
-            Task { await refresh() }
+        .onReceive(router.$pending.compactMap { $0 }) { link in
+            // A deep link (voicedrop://<page>) arrived — apply it, clearing any
+            // pushed detail/settings/record so it lands cleanly, then reset.
+            showRecord = false
+            switch link {
+            case .recordings:
+                tab = .recordings; selectedRec = nil; selectedPost = nil; showSettings = false
+                Task { await refresh() }
+            case .community:
+                tab = .community; selectedRec = nil; selectedPost = nil; showSettings = false
+            case .settings:
+                selectedRec = nil; selectedPost = nil; showSettings = true
+            case .record:
+                selectedRec = nil; selectedPost = nil; showSettings = false; showRecord = true
+            case .article(let stem):
+                tab = .recordings; selectedPost = nil; showSettings = false
+                if let rec = store.recordings.first(where: { $0.stem == stem }) {
+                    selectedRec = rec
+                } else {
+                    Task { await refresh(); selectedRec = store.recordings.first { $0.stem == stem } }
+                }
+            }
+            Task { @MainActor in router.pending = nil }
         }
     }
 
