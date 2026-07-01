@@ -72,6 +72,7 @@ targets:
     sources:
       - path: VoiceDropShare
       - path: VoiceDropApp/Networking.swift   # AppGroup bridge + setBearer, shared verbatim
+      - path: VoiceDropApp/RecordingName.swift   # recording-style filename builder, pure Foundation
     info:
       path: VoiceDropShare/Info.plist
       properties:
