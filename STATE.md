@@ -77,6 +77,7 @@ scopes every request to `users/<sub>/`.
 - `GET  whoami` — returns the caller's resolved data scope `{scope:"users/<sub>/"}`. The app caches it (`LibraryStore.ownerScope()`) and joins `scope + relKey` to load its OWN photos from the public `photo/<key>` endpoint — so even the owner's detail view uses the one photo URL, not the scoped download.
 - `GET  share/<articleKey>` → `{url:"https://jianshuo.dev/voicedrop/<id>"}` (signs + stores `shares/<id>`).
 - `POST mine` → dispatches `mine.yml` (token = `GH_DISPATCH_TOKEN` Pages secret). Dormant — the app's 加急处理 button was removed; kept for manual/debug use.
+- **`POST style/collect`** `{type,title,text,source}` → writes a 风格数据集 corpus sample `users/<sub>/style/<id>.json`; blank text → 400. **`GET style/dataset`** → `{items:[{id,type,title,chars,source,collectedAt}],count,totalChars}` (newest-first, no `text`; tolerates legacy miner `collectStyle` samples). **`DELETE style/dataset`** → clears all `style/*.json`. Backs the Share Extension「风格数据集」sheet (接受分享, see below). `title`/`type` are string-guarded.
 - `POST wechat/<articleKey>` → publish/update a WeChat draft **synchronously** via the VPS relay (see next section). 409 = not configured; 502 relays the real WeChat `{errcode,errmsg}`.
 - `GET asset/wechat-covers` (list) / `GET asset/wechat-covers/<name>` (image bytes) — **public, no auth**; the cover set in the FILES bucket, read by the relay + miner to pick a per-article cover.
 - `GET photo/<full R2 key>` — **public, no auth (2026-06-26).** The ONE photo endpoint used by every display surface (community, public share page, exported HTML). Serves any `users/*/photos/*.(jpg|jpeg|png)` straight from its original R2 location as a plain `<img src>` (CORS `*`, public cache). File-type allowlist + `..` block are the only guard — it can never serve articles/credentials. Full keys are unguessable (hashed sub + ts + rand). Replaced the short-lived gated `community/photo/<shareId>/<token>` design. Even the owner's own detail view (`PhotoTile`) loads through this (full key = `whoami` scope + relKey), so ALL photo display goes through this single endpoint.
@@ -550,6 +551,25 @@ canonical 设计/计划：`docs/superpowers/specs/2026-06-27-device-link-pairing
 **部署/测试状态（2026-06-28）**：代码完成、Worker 全量测试绿（vitest）、iOS BUILD SUCCEEDED。**Worker 部署 + 端到端两机手测
 DEFERRED 给用户**：`cd ~/code/jianshuo.dev/agent && npx wrangler deploy`（含 migration v4）+ iOS 推 main→TestFlight。
 两个特性分支 `device-link-pairing`（jianshuo.dev + voicedrop 各一），待合并。
+
+## 接受分享 (Share Collect) — iOS Share Extension 收件（2026-07-01，feat/share-collect，待合并+部署）
+
+VoiceDrop 是 iOS 系统分享目标。从别的 app 点「分享」→ 自定义 SwiftUI sheet（**替换了老的 `SLComposeServiceViewController`**）按内容类型分派：
+
+| 分享 | sheet | 去向 |
+|---|---|---|
+| **音频 / 图片** | 成文 sheet（`AudioComposeView` 波形版 / `PhotoComposeView` 缩略图版） | 挖文章 |
+| **文字 / 网页 URL / 文档(.pdf/.docx/.rtf)** | `StyleDatasetView`（风格数据集） | 风格语料 →「提取文章风格」蒸馏成写作风格新版本 |
+
+- **客户端提取一切文字**（`VoiceDropShare/ShareExtraction.swift`：PDFKit / `NSAttributedString` / readability——微信特判 `#js_content`），服务端不碰 docx/URL 解析。
+- **图片 = 静音占位 `.m4a`（bundle `silent.m4a`）+ 照片传 `photos/<sessionTs>/`**，复用 miner「无语音+有照片→vision 看图写短文」分支（`IMAGE_ONLY_SYSTEM`，`agent/src/prompts/mine.js`）。**关键不变量：`PhotoComposeView.generate()` 必须先传完所有照片、最后才传静音音频**——因为上传端点对任何 `VoiceDrop-*.m4a` 落地就 `waitUntil(dispatchMine)`，音频先到会让 miner ASR 空转→找不到照片→写 `.empty(no-speech)`→照片被孤儿化。`sessionTs`(照片路径) 与 `audioName` 时间戳同源于一个 `Date()`，miner `sessionTs(audioKey)=parts.slice(1,5).join("-")` 精确匹配。
+- **iOS 主 app 零改动**：占位录音是普通录音，天然进「我的录音」列表/详情/删除；图片经 `[[photo:key]]` 内联渲染。
+- **iOS 文件**（`VoiceDropShare/`）：`ShareViewController`(UIHostingController 入口)、`ShareRouter`(@MainActor,类型分派+loadPayload)、`ShareRootView`、`ShareExtraction`、`ShareAPI`(上传/语料/提取/mine 客户端,复用 `Networking.swift` 的 `API.filesBase/agentBase`/`setBearer`/`isOK`)、三个 sheet。`RecordingName.swift` 已加入扩展 target。
+- **服务端**：语料 `POST style/collect`·`GET style/dataset`·`DELETE style/dataset`（Pages,见上）；**`POST /agent/style/extract`** `{clearAfter}`（agent worker,`agent/src/style-extract.js` 蒸馏,读 `style/*.json`→Claude→`writeStyleDoc` 新版本,`clearAfter` 删语料,best-effort 扣算力,401/400 空数据集,语料总量 48000 字上限防 500)；miner `mineOneAudio` 的「无语音+有照片→vision」（图片-only 用短提示词,不追加 `PHOTO_INSTR` 的口述话术）。
+- **文风蒸馏提示词** `DISTILL_SYSTEM` 目前较基础，后续可对齐 `wjs-distilling-style` skill 的方法。
+- **规格/计划**：`docs/superpowers/specs/2026-07-01-voicedrop-share-receive-design.md` + `docs/superpowers/plans/2026-07-01-voicedrop-share-receive.md`；设计 `design_handoff_share_collect/Share Collect.dc.html`。测试：`agent/test/{mine-image,style-corpus,style-extract,style-extract-route}.test.js`（全套 376 绿）。
+- ⚠️ **待真机验证**：图片分享靠「静音 `.m4a` 让火山 ASR 返回**干净空**（走 `if(!transcript)` vision 分支）」。若火山对 960 字节静音片返回**错误码**（走 `AsrError`→`.empty(asr-error)`,**不 gatherPhotos**），图片会丢。上线前手测一次图片分享确认。
+- **部署状态**：代码完成、376 测试绿、iOS BUILD SUCCEEDED；两个 `feat/share-collect` 分支（jianshuo.dev + voicedrop）**待合并**。部署 DEFERRED 给用户：Worker `npx wrangler deploy` + Pages（干净 worktree）+ iOS 推 main→TestFlight（扩展 profile 已在 match,普通推送即可）。
 
 ## Known issues / TODO
 
