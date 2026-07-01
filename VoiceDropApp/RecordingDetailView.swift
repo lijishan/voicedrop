@@ -1020,9 +1020,23 @@ final class ArticleShareItem: NSObject, UIActivityItemSource {
 /// share pages use.
 struct PhotoTile: View {
     let store: LibraryStore
-    let relKey: String   // relative key, e.g. "photos/<ts>/<ts>.jpg"
+    let relKey: String
 
     @State private var image: UIImage?
+    @State private var failed = false
+    @State private var reloadToken = 0
+    @State private var dim = false   // 呼吸点/扫光驱动
+
+    // 设计稿 Image Placeholder.dc.html 的暖纸/金棕/灰配色
+    private let paperTop = Color(red: 0.953, green: 0.933, blue: 0.894)   // #F3EEE4
+    private let paperBot = Color(red: 0.925, green: 0.894, blue: 0.839)   // #ECE4D6
+    private let gold     = Color(red: 0.788, green: 0.541, blue: 0.180)   // #C98A2E
+    private let goldText = Color(red: 0.541, green: 0.482, blue: 0.376)   // #8A7B60
+    private let corner   = Color(red: 0.706, green: 0.663, blue: 0.561)   // #B4A98F
+    private let failBg   = Color(red: 0.957, green: 0.945, blue: 0.922)   // #F4F1EB
+    private let failIcon = Color(red: 0.690, green: 0.655, blue: 0.596)   // #B0A798
+    private let failText = Color(red: 0.604, green: 0.569, blue: 0.514)   // #9A9183
+    private let retryOra = Color(red: 0.753, green: 0.408, blue: 0.180)   // #C0682E
 
     var body: some View {
         RoundedRectangle(cornerRadius: 12)
@@ -1031,27 +1045,67 @@ struct PhotoTile: View {
             .frame(maxWidth: .infinity)
             .overlay {
                 if let img = image {
-                    Image(uiImage: img)
-                        .resizable().scaledToFill()
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    Image(uiImage: img).resizable().scaledToFill().clipShape(RoundedRectangle(cornerRadius: 12))
+                } else if failed {
+                    failedView
                 } else {
-                    ProgressView().tint(Theme.accent)
+                    makingView
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            // Bind the download to `relKey`, NOT to the view's identity. In the body
-            // ForEach a row's identity is positional ("i\(n)"), so when a newly inserted
-            // photo shifts the numbering, an existing PhotoTile is reused with a *new*
-            // relKey while its identity stays the same. A plain `.task` would not re-run,
-            // leaving the stale (old) image on screen — two different markers showing the
-            // same photo. `.task(id: relKey)` re-runs whenever the key changes.
-            .task(id: relKey) {
-                image = nil
-                // One photo logic everywhere: resolve own scope → full key → public /photo endpoint.
-                guard let scope = await store.ownerScope(),
-                      let data = await store.photoData(fullKey: scope + relKey) else { return }
-                image = UIImage(data: data)
+            .task(id: "\(relKey)#\(reloadToken)") { await load() }
+    }
+
+    private var makingView: some View {
+        LinearGradient(colors: [paperTop, paperBot], startPoint: .topLeading, endPoint: .bottomTrailing)
+            .overlay {
+                VStack(spacing: 12) {
+                    Image(systemName: "photo").font(.system(size: 30, weight: .regular)).foregroundStyle(gold)
+                    Text("正在制作中").font(.system(size: 13, weight: .semibold)).foregroundStyle(goldText)
+                    HStack(spacing: 5) {
+                        ForEach(0..<3) { i in
+                            Circle().fill(gold).frame(width: 5, height: 5)
+                                .opacity(dim ? 0.25 : 1)
+                                .animation(.easeInOut(duration: 0.7).repeatForever().delay(Double(i) * 0.2), value: dim)
+                        }
+                    }
+                    Text("约 1 分钟完成").font(.system(size: 11)).foregroundStyle(corner)
+                }
             }
+            .onAppear { dim = true }
+    }
+
+    private var failedView: some View {
+        failBg.overlay {
+            VStack(spacing: 10) {
+                Image(systemName: "photo").font(.system(size: 30)).foregroundStyle(failIcon)
+                Text("暂时无法显示").font(.system(size: 12)).foregroundStyle(failText)
+                Button {
+                    failed = false; image = nil; reloadToken += 1
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
+                        Text("重试").font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(retryOra)
+                    .padding(.horizontal, 11).padding(.vertical, 4)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(retryOra.opacity(0.35)))
+                }
+            }
+        }
+    }
+
+    private func load() async {
+        image = nil; failed = false
+        guard let scope = await store.ownerScope() else { failed = true; return }
+        let deadline = Date().addingTimeInterval(300)   // 5 分钟封顶
+        while !Task.isCancelled && Date() < deadline {
+            if let data = await store.photoData(fullKey: scope + relKey), let ui = UIImage(data: data) {
+                image = ui; return
+            }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)  // 3s 后重试（仅在图可见且未出时）
+        }
+        if image == nil && !Task.isCancelled { failed = true }
     }
 }
 
