@@ -222,9 +222,10 @@ struct PhotoComposeView: View {
         styleLabel = line.count > 12 ? String(line.prefix(12)) + "…" : line
     }
 
-    /// 「开始生成文章」— upload a silent placeholder `.m4a` (so the miner's ASR
-    /// finds no speech and falls through to its vision pass) plus every shared
-    /// image under `photos/<sessionTs>/`, then kick the miner and close.
+    /// 「开始生成文章」— upload every shared image under `photos/<sessionTs>/`
+    /// FIRST, then a silent placeholder `.m4a` LAST (so the miner's ASR finds
+    /// no speech and falls through to its vision pass), then kick the miner
+    /// and close.
     ///
     /// **Correlation contract:** the miner gathers photos living under
     /// `photos/<ts>/` where `<ts>` is the audio placeholder's OWN embedded
@@ -232,9 +233,19 @@ struct PhotoComposeView: View {
     /// into the filename). Both the placeholder name and every photo key are
     /// derived from ONE `date` captured once at the top of this function — two
     /// separate `Date()` calls could drift across a second boundary and break
-    /// the correlation, silently hiding every photo from the vision pass. Never
-    /// closes on failure (no false success); the button re-enables with an
-    /// inline error so the user can retry.
+    /// the correlation, silently hiding every photo from the vision pass.
+    ///
+    /// **Ordering contract (photos before audio):** the server's upload
+    /// endpoint auto-dispatches the miner the instant ANY `VoiceDrop-*.m4a`
+    /// lands, independent of the explicit `triggerMine()` below. If the silent
+    /// placeholder uploaded first, the mine could start before any photo has
+    /// landed — ASR on the 1-second silent clip finds no speech, the miner
+    /// sees zero photos (still uploading), and writes `.empty(no-speech)`,
+    /// orphaning the photos and losing the share. Uploading all photos before
+    /// the audio matches the in-app recorder's own invariant (photos are in R2
+    /// before the audio triggers the mine) and makes the race impossible.
+    /// Never closes on failure (no false success); the button re-enables with
+    /// an inline error so the user can retry.
     private func generate() async {
         guard !uploading, !payload.images.isEmpty else { return }
         uploading = true
@@ -244,21 +255,10 @@ struct PhotoComposeView: View {
         let sessionTs = RecordingName.timestamp(date)
         let audioName = RecordingName.make(start: date, duration: 1, place: nil)
 
-        guard let silent = Bundle.main.url(forResource: "silent", withExtension: "m4a") else {
-            uploading = false
-            uploadFailed = true
-            return
-        }
-
-        guard await ShareAPI.putFile(silent, name: audioName, contentType: "audio/mp4") else {
-            uploading = false
-            uploadFailed = true
-            return
-        }
-
-        // Encode + upload each photo. Square-crop/JPEG-encode runs `Task.detached`
-        // per image (like Task 8's off-main doc-parse fix) so decoding/encoding N
-        // full-resolution shared photos never blocks the main actor.
+        // Encode + upload each photo FIRST. Square-crop/JPEG-encode runs
+        // `Task.detached` per image (like Task 8's off-main doc-parse fix) so
+        // decoding/encoding N full-resolution shared photos never blocks the
+        // main actor.
         var uploadedPhotos = 0
         for (i, imgURL) in payload.images.enumerated() {
             let jpeg = await Task.detached(priority: .userInitiated) {
@@ -277,6 +277,19 @@ struct PhotoComposeView: View {
         // (some but not all photos landed) still proceeds; the article will
         // just reflect the photos that made it.
         guard uploadedPhotos > 0 else {
+            uploading = false
+            uploadFailed = true
+            return
+        }
+
+        // Silent placeholder LAST — see "Ordering contract" above.
+        guard let silent = Bundle.main.url(forResource: "silent", withExtension: "m4a") else {
+            uploading = false
+            uploadFailed = true
+            return
+        }
+
+        guard await ShareAPI.putFile(silent, name: audioName, contentType: "audio/mp4") else {
             uploading = false
             uploadFailed = true
             return
