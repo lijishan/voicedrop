@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 「我的录音」— the app's home (方案二). White-card list of recordings; a docked
 /// pure-red record key at the bottom opens the full-screen recording takeover;
@@ -21,10 +22,12 @@ struct LibraryView: View {
     @State private var selectedPost: CommunityPost?
     @State private var confirmUnshare: CommunityPost?
 
-    // Voice-command mode (长按红键): a library-wide "按住说话" bar that can act on
-    // any recording by its on-screen number ("删掉第二条"). Separate dictation +
-    // session instances from RecordingDetailView's article-level editing.
-    @State private var commandMode = false
+    // 语音指令 walkie-talkie: the red record button itself doubles as a
+    // library-wide press-and-hold mic that can act on any recording by its
+    // on-screen number ("删掉第二条"). Separate dictation + session instances
+    // from RecordingDetailView's article-level editing.
+    @State private var talking = false
+    @State private var willCancel = false
     @State private var dictation = SpeechDictation()
     @State private var command = LibraryCommandSession()
     @State private var commandReply: AgentReply?
@@ -102,7 +105,7 @@ struct LibraryView: View {
         .background(Theme.appBG.ignoresSafeArea())
         .overlay(alignment: .bottom) {
             if tab == .recordings {
-                if commandMode { commandBar } else { recordButton }
+                recordButton
             } else {
                 EmptyView()
             }
@@ -129,7 +132,13 @@ struct LibraryView: View {
             // an edit lands + a destructive-action confirm prompt.
             command.onReply = { text, ok in commandReply = AgentReply(text: text, ok: ok) }
             command.onUpdate = { _ in Task { await refresh() } }
-            command.onConfirm = { id, summary in confirmPrompt = (id: id, summary: summary) }
+            command.onConfirm = { id, summary in
+                confirmPrompt = (id: id, summary: summary)
+                // A destructive result can land while a hold is still active (the
+                // confirm round-trip is usually faster than a press, but not always)
+                // — drop out of "talking" so the alert isn't fighting the mic UI.
+                if talking { talking = false }
+            }
             command.connect()
             await dictation.requestAuth()
         }
@@ -360,12 +369,13 @@ struct LibraryView: View {
         .cardChromeShadow()
         .opacity(empty ? 0.72 : 1)
         .overlay(alignment: .topLeading) {
-            if commandMode, let n = commandNumber(for: rec) { numberBadge(n) }
+            if talking, let n = commandNumber(for: rec) { numberBadge(n) }
         }
     }
 
-    /// Small circled number ("2") pinned to a row's leading corner in command
-    /// mode — the number the user speaks to target that recording ("删掉第二条").
+    /// Small circled number ("2") pinned to a row's leading corner while
+    /// holding the red key to talk — the number the user speaks to target
+    /// that recording ("删掉第二条").
     private func numberBadge(_ n: Int) -> some View {
         Text("\(n)")
             .font(.system(size: 12, weight: .bold))
@@ -421,29 +431,79 @@ struct LibraryView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: Record button (floats over the list — no pane)
+    // MARK: Record button (floats over the list — no pane; IS the walkie-talkie)
 
+    /// The red key itself: tap records a take (unchanged); press-and-hold turns
+    /// it into a 微信式「按住说话」 mic for library-wide 语音指令 ("删掉第二条"),
+    /// reusing the same feedback bubbles as article-level voice editing.
     private var recordButton: some View {
         VStack(spacing: 7) {
-            Button { showRecord = true } label: {
-                Circle().fill(Theme.card).frame(width: 66, height: 66)
-                    .overlay(Circle().stroke(Color(hex: "E8DECF"), lineWidth: 1))
-                    .overlay(
-                        Circle().fill(Theme.recordRed).frame(width: 54, height: 54)
-                            .shadow(color: Color(.sRGB, red: 229/255, green: 57/255, blue: 46/255, opacity: 0.40), radius: 4, x: 0, y: 2)
-                    )
-                    .shadow(color: .black.opacity(0.12), radius: 12, x: 0, y: 5)   // lift off the list
+            if talking || commandReply != nil || !command.queue.isEmpty {
+                VoiceFeedbackStack(transcript: talking ? dictation.transcript : nil,
+                                   reply: commandReply, queue: command.queue)
+                    .padding(.horizontal, 16)
             }
-            .buttonStyle(.plain).accessibilityLabel("录音")
-            // Long-press the red key to switch the list into 语音指令 mode instead
-            // of starting a recording — tap still records (unchanged).
-            .simultaneousGesture(LongPressGesture(minimumDuration: 0.3).onEnded { _ in commandMode = true })
-            Text("轻点录音 · 长按语音指令").font(.system(size: 12)).tracking(1).foregroundStyle(Theme.secondary)
+            redCircle
+                .scaleEffect(talking ? 1.08 : 1)
+                .gesture(talkGesture)
+                .simultaneousGesture(TapGesture().onEnded { if !talking { showRecord = true } })
+            Text(talking ? (willCancel ? "上滑取消 · 松开放弃" : "松开发送 · 上滑取消") : "轻点录音 · 长按说话")
+                .font(.system(size: 12)).tracking(1)
+                .foregroundStyle(talking ? Theme.accent : Theme.secondary)
         }
         .padding(.bottom, 8)
+        .animation(.easeInOut(duration: 0.18), value: talking)
     }
 
-    // MARK: Voice-command mode (长按红键)
+    /// The pure-red circle key. Same visuals as before at rest; while `talking`
+    /// a thin accent ring adds emphasis (the `scaleEffect` bump lives in
+    /// `recordButton`, applied on top of this).
+    private var redCircle: some View {
+        Circle().fill(Theme.card).frame(width: 66, height: 66)
+            .overlay(Circle().stroke(talking ? Theme.recordRed.opacity(0.55) : Color(hex: "E8DECF"),
+                                      lineWidth: talking ? 2 : 1))
+            .overlay(
+                Circle().fill(Theme.recordRed).frame(width: 54, height: 54)
+                    .shadow(color: Color(.sRGB, red: 229/255, green: 57/255, blue: 46/255, opacity: 0.40), radius: 4, x: 0, y: 2)
+            )
+            .shadow(color: .black.opacity(0.12), radius: 12, x: 0, y: 5)   // lift off the list
+            .contentShape(Circle())
+            .accessibilityLabel("录音")
+    }
+
+    /// Sequenced long-press → drag so the whole hold is ONE continuous touch:
+    /// a quick tap never engages this gesture (falls through to the sibling
+    /// `TapGesture` and records normally); holding past 0.3s starts dictation,
+    /// and sliding up cancels — mirroring `PushToTalkBar.holdGesture()`.
+    private var talkGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.3)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .onChanged { value in
+                if case .second(true, let drag) = value {
+                    if !talking {
+                        talking = true
+                        commandReply = nil
+                        if dictation.authorized == true { dictation.start() }
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    }
+                    willCancel = (drag?.translation.height ?? 0) < -60
+                }
+            }
+            .onEnded { value in
+                guard case .second(true, _) = value else { return }
+                let cancel = willCancel
+                talking = false; willCancel = false
+                if cancel { dictation.stop(); return }
+                Task {
+                    let text = (await dictation.stopAndGetFinal()).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty else { return }
+                    command.setRefs(currentRefs())
+                    command.enqueue(text, images: [], articleIndex: 0)
+                }
+            }
+    }
+
+    // MARK: 语音指令 refs (长按红键说话)
 
     /// Numbered refs for the command agent, matching the on-screen circled numbers
     /// in `rowCard` 1:1 — both are absolute positions in `store.recordings`
@@ -455,30 +515,11 @@ struct LibraryView: View {
         }
     }
 
-    /// The circled number to show on `rec`'s row while in command mode, or nil if
-    /// `rec` isn't a numbered target (still uploading / not yet on the server).
+    /// The circled number to show on `rec`'s row while holding the red key to
+    /// talk, or nil if `rec` isn't a numbered target (still uploading / not yet
+    /// on the server).
     private func commandNumber(for rec: Recording) -> Int? {
         guard let idx = store.recordings.firstIndex(where: { $0.id == rec.id }) else { return nil }
         return idx + 1
-    }
-
-    /// Floating "按住说话" bar + a small 完成 affordance to leave command mode.
-    /// Refs are refreshed right before each send (`onWillSend`) so a list change
-    /// mid-session (e.g. a new article lands) doesn't go stale.
-    private var commandBar: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Spacer()
-                Button("完成") { commandMode = false; commandReply = nil; dictation.stop() }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Theme.card, in: Capsule())
-                    .overlay(Capsule().stroke(Theme.borderRead, lineWidth: 1))
-            }
-            .padding(.horizontal, 16)
-            PushToTalkBar(dictation: dictation, session: command, agentReply: commandReply,
-                          onWillSend: { command.setRefs(currentRefs()) })
-        }
     }
 }

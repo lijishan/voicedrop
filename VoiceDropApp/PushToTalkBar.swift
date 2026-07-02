@@ -8,45 +8,30 @@ struct AgentReply: Identifiable, Equatable {
     let ok: Bool
 }
 
-/// 微信式「按住说话」条：常驻底部，按住录音、松开把指令交给 `session`。文章编辑
-/// （`highlightLocators: true` + 当前 articleIndex）与未来的库级指令（默认值）共用
-/// 同一份 UI/手势逻辑，只靠这几个参数区分两处耦合。
-struct PushToTalkBar: View {
-    let dictation: SpeechDictation
-    let session: any VoiceAgentSession
+/// The reusable feedback UI shared by every 语音指令 surface: the live-transcript
+/// bubble, the agent's one-line reply, and the stacked queue of pending commands.
+/// `PushToTalkBar` (article-level editing) and the library-wide red-button
+/// walkie-talkie (`LibraryView.recordButton`) both render this — same bubbles,
+/// same styling — so the two surfaces never drift apart visually.
+struct VoiceFeedbackStack: View {
+    /// Non-nil ⇒ show the dark live-transcript bubble ("在听…" when empty).
+    let transcript: String?
+    let reply: AgentReply?
+    let queue: [ArticleAgentSession.EditRequest]
     /// 第N行/图N 染色，仅文章编辑（RecordingDetailView）开；库级指令没有行号语境，关掉。
     var highlightLocators: Bool = false
-    /// 文章编辑传当前篇 index；库级传 0（协议 enqueue 需要一个值，库级不使用它）。
-    var articleIndex: () -> Int = { 0 }
-    /// 悬浮在 bar 上方的一次性回复气泡；由调用方持有其生命周期（何时清除，例如「点击正文空白处」）。
-    var agentReply: AgentReply? = nil
-    /// 松开发送、真正 enqueue 之前触发的钩子（预留给未来库级场景，如发送前刷新态）。
-    var onWillSend: (() -> Void)? = nil
-
-    // 上滑取消的手势态，完全是这条 bar 自己的 UI 细节，不需要外部知道。
-    @State private var willCancel = false
 
     var body: some View {
-        let recording = dictation.isRecording
-        let working = session.state == .working
-        let firstId = session.queue.first?.id
-        return VStack(spacing: 8) {
-            if let reply = agentReply { replyBubble(reply) }
+        let firstId = queue.first?.id
+        VStack(spacing: 8) {
+            if let reply { replyBubble(reply) }
             // Pending edits pile up here — newest on top, the one in flight sits
             // just above the button and drains first; each builds on the last.
-            ForEach(session.queue.reversed()) { req in
+            ForEach(queue.reversed()) { req in
                 queueRow(req, inFlight: req.id == firstId)
             }
-            if recording { darkBubble(dictation.transcript) }
-            pill(recording: recording, working: working)
-                .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 5)   // float over the body
+            if let transcript { darkBubble(transcript) }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 10)
-        .frame(maxWidth: .infinity)
-        .animation(.easeInOut(duration: 0.22), value: session.queue)
-        .animation(.easeInOut(duration: 0.18), value: recording)
-        .animation(.easeInOut(duration: 0.22), value: agentReply)
     }
 
     /// One queued instruction. The in-flight head is highlighted; the rest wait.
@@ -69,30 +54,6 @@ struct PushToTalkBar: View {
         .overlay(RoundedRectangle(cornerRadius: 13)
             .stroke(inFlight ? Theme.accent.opacity(0.5) : Theme.borderRead, lineWidth: 1))
         .transition(.move(edge: .bottom).combined(with: .opacity))
-    }
-
-    private func pill(recording: Bool, working: Bool) -> some View {
-        HStack(spacing: 8) {
-            if recording {
-                Text(willCancel ? "上滑取消 · 松开放弃" : "松开 发送 · 上滑取消")
-                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.accent)
-            } else if working {
-                Image(systemName: "pencil.line").font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .symbolEffect(.pulse, options: .repeating)
-                Text("正在改…按住继续说").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
-            } else {
-                Image(systemName: "mic").font(.system(size: 16)).foregroundStyle(Theme.ink)
-                Text("按住 说话 修改").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 15)
-        .background(RoundedRectangle(cornerRadius: Theme.R.primary).fill(Theme.card))
-        .overlay(RoundedRectangle(cornerRadius: Theme.R.primary).stroke(Theme.borderRead, lineWidth: 1))
-        .shadow(color: .clear, radius: 7, x: 0, y: 4)
-        .contentShape(RoundedRectangle(cornerRadius: Theme.R.primary))
-        .gesture(holdGesture())
     }
 
     /// The agent's one-line reply. Success: neutral light card. Error: muted-red
@@ -155,6 +116,66 @@ struct PushToTalkBar: View {
             }
         }
         return Text(att)
+    }
+}
+
+/// 微信式「按住说话」条：常驻底部，按住录音、松开把指令交给 `session`。文章编辑
+/// （`highlightLocators: true` + 当前 articleIndex）与未来的库级指令（默认值）共用
+/// 同一份 UI/手势逻辑，只靠这几个参数区分两处耦合。
+struct PushToTalkBar: View {
+    let dictation: SpeechDictation
+    let session: any VoiceAgentSession
+    /// 第N行/图N 染色，仅文章编辑（RecordingDetailView）开；库级指令没有行号语境，关掉。
+    var highlightLocators: Bool = false
+    /// 文章编辑传当前篇 index；库级传 0（协议 enqueue 需要一个值，库级不使用它）。
+    var articleIndex: () -> Int = { 0 }
+    /// 悬浮在 bar 上方的一次性回复气泡；由调用方持有其生命周期（何时清除，例如「点击正文空白处」）。
+    var agentReply: AgentReply? = nil
+    /// 松开发送、真正 enqueue 之前触发的钩子（预留给未来库级场景，如发送前刷新态）。
+    var onWillSend: (() -> Void)? = nil
+
+    // 上滑取消的手势态，完全是这条 bar 自己的 UI 细节，不需要外部知道。
+    @State private var willCancel = false
+
+    var body: some View {
+        let recording = dictation.isRecording
+        let working = session.state == .working
+        return VStack(spacing: 8) {
+            VoiceFeedbackStack(transcript: recording ? dictation.transcript : nil,
+                               reply: agentReply, queue: session.queue, highlightLocators: highlightLocators)
+            pill(recording: recording, working: working)
+                .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 5)   // float over the body
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity)
+        .animation(.easeInOut(duration: 0.22), value: session.queue)
+        .animation(.easeInOut(duration: 0.18), value: recording)
+        .animation(.easeInOut(duration: 0.22), value: agentReply)
+    }
+
+    private func pill(recording: Bool, working: Bool) -> some View {
+        HStack(spacing: 8) {
+            if recording {
+                Text(willCancel ? "上滑取消 · 松开放弃" : "松开 发送 · 上滑取消")
+                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.accent)
+            } else if working {
+                Image(systemName: "pencil.line").font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .symbolEffect(.pulse, options: .repeating)
+                Text("正在改…按住继续说").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
+            } else {
+                Image(systemName: "mic").font(.system(size: 16)).foregroundStyle(Theme.ink)
+                Text("按住 说话 修改").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 15)
+        .background(RoundedRectangle(cornerRadius: Theme.R.primary).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.R.primary).stroke(Theme.borderRead, lineWidth: 1))
+        .shadow(color: .clear, radius: 7, x: 0, y: 4)
+        .contentShape(RoundedRectangle(cornerRadius: Theme.R.primary))
+        .gesture(holdGesture())
     }
 
     /// Press-and-hold drives dictation; release sends (unless slid up to cancel).
