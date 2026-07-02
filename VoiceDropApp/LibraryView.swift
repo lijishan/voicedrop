@@ -546,6 +546,11 @@ private struct RowCoverIcon: View {
     let relKey: String
     @State private var image: UIImage?
 
+    /// Process-wide decoded-image cache, shared across every row. Keyed by rel key
+    /// (unique per photo). NSCache evicts under memory pressure on its own. This is
+    /// what stops a re-download every time a row scrolls back into view.
+    private static let cache = NSCache<NSString, UIImage>()
+
     var body: some View {
         RoundedRectangle(cornerRadius: Theme.R.card)
             .fill(Theme.recordRedSoft)
@@ -563,10 +568,18 @@ private struct RowCoverIcon: View {
     }
 
     private func load() async {
-        image = nil
+        // Cache hit → show instantly, no network, no waveform flash. (Set to the
+        // cached image for THIS key — or nil if absent — so a recycled row never
+        // shows the previous photo.)
+        let cached = Self.cache.object(forKey: relKey as NSString)
+        image = cached
+        if cached != nil { return }
         guard let scope = await store.ownerScope() else { return }
         if let data = await store.photoData(fullKey: scope + relKey), let ui = UIImage(data: data) {
-            image = ui
+            Self.cache.setObject(ui, forKey: relKey as NSString)
+            // Guard against a stale set if the row got recycled to a new key mid-fetch
+            // (.task(id:) cancels the old task on key change).
+            if !Task.isCancelled { image = ui }
         }
     }
 }
