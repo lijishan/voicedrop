@@ -161,7 +161,13 @@ final class LibraryCommandSession: VoiceAgentSession {
     }
 
     private func decodeDoc(_ any: Any?) -> ArticleDoc? {
-        guard let any, let d = try? JSONSerialization.data(withJSONObject: any) else { return nil }
+        // `article` is often JSON null for library commands (merge/delete report no
+        // single doc) → it arrives as NSNull, which is non-nil but NOT a valid
+        // top-level JSON object. `data(withJSONObject:)` would then throw an
+        // Objective-C NSInvalidArgumentException that `try?` CANNOT catch → abort().
+        // Gate on isValidJSONObject (false for NSNull / fragments) before serializing.
+        guard let any, JSONSerialization.isValidJSONObject(any),
+              let d = try? JSONSerialization.data(withJSONObject: any) else { return nil }
         return try? JSONDecoder().decode(ArticleDoc.self, from: d)
     }
 

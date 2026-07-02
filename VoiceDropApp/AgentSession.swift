@@ -136,7 +136,12 @@ final class ArticleAgentSession: VoiceAgentSession {
     }
 
     private func decodeDoc(_ any: Any?) -> ArticleDoc? {
-        guard let any, let d = try? JSONSerialization.data(withJSONObject: any) else { return nil }
+        // A JSON-null `article` arrives as NSNull (non-nil but not a valid top-level
+        // JSON object); `data(withJSONObject:)` would throw an ObjC exception `try?`
+        // can't catch → abort(). Gate on isValidJSONObject first. (See the same fix
+        // in LibraryCommandSession.decodeDoc — the library path hits null far more.)
+        guard let any, JSONSerialization.isValidJSONObject(any),
+              let d = try? JSONSerialization.data(withJSONObject: any) else { return nil }
         return try? JSONDecoder().decode(ArticleDoc.self, from: d)
     }
 
