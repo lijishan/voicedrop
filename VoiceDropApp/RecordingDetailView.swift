@@ -1026,6 +1026,7 @@ struct PhotoTile: View {
     @State private var failed = false
     @State private var reloadToken = 0
     @State private var dim = false   // 呼吸点/扫光驱动
+    @State private var showMaking = false   // 0.9s 宽限期后才升级为「制作中」
 
     // 设计稿 Image Placeholder.dc.html 的暖纸/金棕/灰配色
     private let paperTop = Color(red: 0.953, green: 0.933, blue: 0.894)   // #F3EEE4
@@ -1048,12 +1049,19 @@ struct PhotoTile: View {
                     Image(uiImage: img).resizable().scaledToFill().clipShape(RoundedRectangle(cornerRadius: 12))
                 } else if failed {
                     failedView
-                } else {
+                } else if showMaking {
                     makingView
+                } else {
+                    graceView
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .task(id: "\(relKey)#\(reloadToken)") { await load() }
+    }
+
+    /// 加载前 ~0.9s 的宽限期：只露暖纸底色，不出「制作中」文案，避免正常图片一闪而过。
+    private var graceView: some View {
+        LinearGradient(colors: [paperTop, paperBot], startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
     private var makingView: some View {
@@ -1096,12 +1104,19 @@ struct PhotoTile: View {
     }
 
     private func load() async {
-        image = nil; failed = false
+        image = nil; failed = false; showMaking = false
         guard let scope = await store.ownerScope() else { failed = true; return }
+        // 0.9s 宽限期：正常已存在的图片多在此窗口内加载完成，不升级为「制作中」；
+        // 只有真的还没出图才翻牌。
+        let grace = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            if image == nil && !Task.isCancelled { showMaking = true }
+        }
+        defer { grace.cancel() }
         let deadline = Date().addingTimeInterval(300)   // 5 分钟封顶
         while !Task.isCancelled && Date() < deadline {
             if let data = await store.photoData(fullKey: scope + relKey), let ui = UIImage(data: data) {
-                image = ui; return
+                image = ui; showMaking = false; return
             }
             try? await Task.sleep(nanoseconds: 3_000_000_000)  // 3s 后重试（仅在图可见且未出时）
         }
