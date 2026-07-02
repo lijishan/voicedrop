@@ -8,6 +8,7 @@ import AVFoundation
 struct MinedArticle: Decodable, Identifiable {
     let title: String
     let body: String
+    var style: Int?                 // 文风版本 per-article 字段（legacy 文章在 body 注释里，读回退）
     var wechatMediaId: String?      // present once a WeChat draft has been created
     var id: String { title + "\(body.count)" }
 }
@@ -110,10 +111,11 @@ enum ArticleBody {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // Per-version body comment protocol: `<!-- key: value -->`, extensible (mirrors the
-    // server's style-store.js). First key `style` → the chip label ("风格 v8"). Any version
-    // self-describes via these comments; the reader shows them and strips them from every
-    // rendered surface. Future per-version UI just adds another key.
+    // LEGACY body comment protocol: `<!-- key: value -->`. The 文风版本 moved to the
+    // per-article `style` FIELD (2026-07-03) — a hidden comment line desynced the 第N行
+    // numbering between app and agent. Server-side migration stripped stored bodies;
+    // these parsers remain as read fallback for stragglers, and stripOriginComment
+    // stays so a comment can never reach any rendered surface.
     private static let metaComment = try! NSRegularExpression(pattern: #"<!--\s*([A-Za-z][\w-]*)\s*:\s*(.*?)\s*-->"#)
     private static let anyComment  = try! NSRegularExpression(pattern: #"<!--.*?-->"#, options: [.dotMatchesLineSeparators])
 

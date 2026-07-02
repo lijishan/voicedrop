@@ -1,6 +1,6 @@
 # VoiceDrop — project state (read this first)
 
-Last updated: 2026-06-25
+Last updated: 2026-07-03
 
 ## What it is
 
@@ -54,7 +54,7 @@ scopes every request to `users/<sub>/`.
 ## R2 layout & marker conventions (the contract everyone shares)
 
 - `users/<sub>/VoiceDrop-<ts>-<dur>-<weekday>-<period>[-<city>-<district>].m4a` — audio (ASCII names).
-- `users/<sub>/articles/<stem>.json` — mined article(s), v2 schema `{schema,id,sourceAudio,createdAt,transcript,srt,articles:[{title,body}],status,model}`. **Presence = 已成文.** (Photo references live in the body as `[[photo:<key>]]` markers — see below. **`photos` is no longer written** as of 2026-06-26; old articles may still carry a legacy `photos` array, read only to resolve their `[[photo:N]]` indices.)
+- `users/<sub>/articles/<stem>.json` — mined article(s), v2 schema `{schema,id,sourceAudio,createdAt,transcript,srt,articles:[{title,body,style?,wechatMediaId?}],status,model}` (`style` = 文风版本 per-article 字段，见「文风版本 = per-article 字段」节). **Presence = 已成文.** (Photo references live in the body as `[[photo:<key>]]` markers — see below. **`photos` is no longer written** as of 2026-06-26; old articles may still carry a legacy `photos` array, read only to resolve their `[[photo:N]]` indices.)
 - `users/<sub>/articles/<stem>.empty` — `{status:"empty",reason:"corrupt|silent|no-speech|too-short|no-article|asr-error:<code>"}`. **Presence = 无语音.** (`asr-error:<code>` = Volcano returned a deterministic business error in the query phase, e.g. `asr-error:45000151` — re-running gets the same code, so the recording is marked processed instead of retried forever. The app ignores `reason` and just shows 无语音.)
 - `users/<sub>/articles/<stem>.srt` — subtitle sidecar.
 - `users/<sub>/photos/<sessionTs>/<offset>-<rand>.jpg` — **场景照片**（录音时一边说一边拍，隐藏功能）. `sessionTs` = the recording's `yyyy-MM-dd-HHmmss` (correlates photo↔recording). **`<offset>` = 整数秒, the photo's offset from the recording start** — this IS "第几秒加进来"; absolute capture time is recoverable as `sessionTs + offset`, so the old absolute capture stamp was redundant. `<rand>` = a 3-char base36 tail. **Why offset+rand, not a capture timestamp (changed 2026-06-26):** the prior `<captureTs>` (`yyyy-MM-dd-HHmmss`) had **two bugs** — (1) seconds-only resolution **collided** when several photos landed in the same second (a 9-photo album import fires its `loadObject` callbacks near-simultaneously → same key → silent overwrite, lost photos); (2) it was 17 chars when 2–4 would do. The `<rand>` tail makes the key unique even within one offset-second (3 base36 = 46,656 combos → ~0.08% collision for 9 same-second photos). Helper is the single source of truth: `RecordingName.photoKey(sessionTs:offset:)` (iOS); both upload paths use it — editor insert (`RecordingDetailView.insertPhotos`, offset via `RecordingName.date(fromTimestamp:)`) and during-recording capture (`RecordSession.uploadPhoto`, offset = `date − sessionStart`). **Note** offset is only真·"录音内第几秒" for the during-recording path; for editor-inserted / album-imported photos it's "how long after recording it was added" (large but unique & harmless). **iOS-only change** — worker/web treat the marker token as an opaque key, so the renamed `<offset>-<rand>` segment is transparent to them. Square ≤1200px JPEG. Uploaded by the app via the normal `PUT upload/<key>` (lands in user scope). **Inline display:** the miner (`miner.js`) and the voice-edit agent (`index.js`) feed photos to Claude as vision input and insert **`[[photo:<relkey>]]`** markers — **the token IS the photo's relative R2 key** (e.g. `[[photo:photos/<sessionTs>/<offset>-<rand>.jpg]]`) — into the body at the spot the scene is described; the app/web resolve each marker's key directly and render the photo inline. **Why keys, not indices (changed 2026-06-26):** the old `[[photo:N]]` used a 1-based index into the `photos` array, which coupled every marker to that array's order — inserting/reordering a photo during voice-edit misnumbered the rest and showed "different marker, same image". A self-contained key has zero coupling: insert/delete a marker without touching any other. **The `photos` array is no longer written (2026-06-26):** the miner (`miner.js`) and the voice-edit agent (`index.js`) stopped writing it — consumers extract referenced keys straight from the body instead (web via `photoRefsInBodies`→`buildPhotoURLs`; iOS export via `ArticleBody.segments`; iOS detail view's `PhotoTile` already downloaded by marker key). **Legacy `[[photo:N]]` is still parsed for old articles** — resolver is `ArticleBody.resolvePhotoKey` (iOS, numeric→`photos[N-1]` else token-is-key) and `photoRefsInBodies`'s `/^\d+$/` branch, both mapping the index through the old article's surviving `photos` array. New writes from all paths use keys only; an old article's `photos` array is read-only legacy. Markers are **stripped** wherever photos can't be shown — WeChat HTML (`md_to_wechat_html`), exports, and share excerpts (all marker regexes widened to `[[photo:[^\]]+]]`). **Photos now load from ONE universal endpoint** (changed 2026-06-26): `GET /files/api/photo/<full R2 key>` — public, no auth, no per-post gating, serves any `users/*/photos/*.(jpg|png)` straight from its original location. Used everywhere: the public `/voicedrop/<token>` page emits `<img src="/files/api/photo/…">` (`buildPhotoURLs`, no more base64), and the community (`CommunityPostView` renders `ArticleBody.segments` with inline `CommunityPhotoTile`s, no longer `stripMarkers`). The editing agent is told to preserve markers (and their keys) verbatim.
@@ -68,6 +68,35 @@ scopes every request to `users/<sub>/`.
 - `llmlogs/<YYYY-MM-DD>/<epochms>-<rand6>.json` — **every** Anthropic call (Worker miner + agent worker) recorded raw `{id,ts,source:mine|agent,user_scope,model,latency_ms,http_status,ok,turn_id,step,request,response|error,meta}`. Admin-only (outside `users/`). 30-day R2 lifecycle (`llmlogs-30d`). Viewer: `voicedrop/admin/llm.html` (reads via admin `GET /files/api/llmlog/{dates,list?date=}` + `download/<key>`). Best-effort write — never blocks mining/editing.
 - `minelogs/<YYYY-MM-DD>/<epochms>-<stem>.json` — **每次 Miner DO 处理**一条录音的事件日志 `{ts,stem,audioKey,result:"mined|empty|error",elapsed_ms,events:[{ts,msg,data}]}`. Admin-only. Viewer: `voicedrop/admin/mine.html`. Best-effort —`result:"skip"`（已处理跳过）时不写。
 
+
+## 文风版本 = per-article 字段（2026-07-03，迁移已完成）
+
+- **`articles[i].style = N`（整数）= 这篇文章的文风版本**，per-article、随版本走（undo/redo 后
+  chip 正确）。写入方：miner 正常挖矿 + restyle（`agent/src/miner.js` 两处 `{...a, style: v}`）。
+  风格介绍文（style-intro）无 style 字段（历来如此）。
+- **正文里不再有 `<!-- style: 风格 vN -->` 注释。** 隐形注释行曾让 iOS（渲染/编号前
+  `stripOriginComment` 剥注释）与 agent `linenum.js`（不剥）的 第N行 错位 +1 → 语音编辑
+  「改第3行」改错行。存量已由 `agent/scripts/migrate-style-field`（经 `wrangler dev --remote`
+  直连生产 R2，走 wrangler OAuth，无需 FILES_TOKEN；游标分页防 504）一次性迁移：382 docs
+  扫描、50 迁移（注释→字段、body 去注释、含全部 versions/history）、二次 dry-run 0、线上
+  `<!--` 残留 0。迁移前全量备份 `~/Downloads/voicedrop-articles-backup-2026-07-03.ndjson`
+  （另有每晚 R2 自动备份兜底）。
+- ⚠️ **per-article 可扩展契约（以后加字段必读）**：tools.js 所有重建 `doc.articles` 的写路径
+  一律「继承+覆盖」`{...a, title, body}` —— 未知字段（style / wechatMediaId / 未来任何字段）
+  自动存活；**绝不要回退成 `{title, body}` 白名单重建**（会在每次编辑时静默丢字段，
+  wechatMediaId 曾靠每处手搬才活着）。doc 顶层字段由 `writeArticleDoc` 的 `...rest` 保留；
+  version 条目层固定 `{v,savedAt,source,articles}`（要加得改 article-store.js）。整篇重写
+  （write_article）按 index 从旧文章继承，拆/并文章时字段可能错位（既有语义，chip 显错无害）。
+  模型进不来未知字段（工具 input_schema 均 `additionalProperties:false`）。
+- **linenum.js 防御性剥注释**：编号前剥一切 `<!--…-->`（镜像 iOS），残留注释在编辑回写时
+  自动消失（自清洁）。测试：`agent/test/style-field.test.js`（编号 / 字段存活 / 迁移 transform）。
+- **iOS**：`MinedArticle.style: Int?`；chip 与 `existingVersion(forStyle:)`（换风格「复用已有
+  版本」匹配）先读字段、回退读 body 注释；`stripOriginComment` 保留当保险。老 build 读不到
+  注释 → chip 显「选风格」，装新 build 恢复。
+- 已知遗留：① 3 个 doc 曾带更老格式 `<!--风格vN-->`（无 `style:` 键），解析器历来读不出，
+  迁移只剥注释未提字段——显示零回归；② legacy 数字图片标记（`[[photo:N]]`）越界时 iOS 跳行
+  不计数而 linenum.js 计数——罕见旧数据的编号分歧，未修。
+- Spec：`docs/superpowers/specs/2026-07-03-style-field-schema-design.md`。
 
 ## Files API (`jianshuo.dev/files/api/<path>`, Cloudflare Pages Function)
 

@@ -56,19 +56,23 @@ struct RecordingDetailView: View {
 
     private var articles: [MinedArticle] { doc?.resolvedArticles ?? [] }
 
-    /// The `style` chip label of the current article (e.g. "风格 v8"), from the body's
-    /// `<!-- style: … -->` comment. nil → no chip (legacy / no-style articles).
-    private var currentStyleLabel: String? {
-        guard let body = articles.first?.body else { return nil }
-        return ArticleBody.styleLabel(body)
-    }
+    /// The 文风 version of the current article — the per-article `style` field;
+    /// legacy articles fall back to the body's `<!-- style: … -->` comment.
+    /// nil → no chip (no-style articles).
     private var currentStyleV: Int? {
-        guard let body = articles.first?.body else { return nil }
-        return ArticleBody.styleVersion(body)
+        guard let a = articles.first else { return nil }
+        return a.style ?? ArticleBody.styleVersion(a.body)
+    }
+    /// The chip label, e.g. "风格 v8".
+    private var currentStyleLabel: String? {
+        currentStyleV.map(ArticleBody.styleLabel(forVersion:))
     }
     /// A version already tagged with 文风 vN (the latest such) → reuse via patchHead, free.
     private func existingVersion(forStyle v: Int) -> ArticleVersionEntry? {
-        versions.last { ArticleBody.styleVersion($0.articles.first?.body ?? "") == v }
+        versions.last { entry in
+            guard let a = entry.articles.first else { return false }
+            return (a.style ?? ArticleBody.styleVersion(a.body)) == v
+        }
     }
 
     /// Tappable chip on the meta line — opens 换风格重写. Shows the current 风格 vN.
