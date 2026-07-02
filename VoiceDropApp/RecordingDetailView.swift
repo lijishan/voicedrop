@@ -197,6 +197,7 @@ struct RecordingDetailView: View {
         guard !connected, !articles.isEmpty else { return }
         connected = true
         agent.onUpdate = { [self] newDoc in
+            guard let newDoc else { return }
             doc = newDoc
             articleIndex = min(articleIndex, max(0, newDoc.resolvedArticles.count - 1))
             // A new agent edit writes a new version; refresh history and reset to latest.

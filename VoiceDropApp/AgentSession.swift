@@ -17,7 +17,7 @@ struct AgentImage: Equatable {
 /// socket, a backgrounding, or an app-kill never loses or double-applies an edit.
 @MainActor
 @Observable
-final class ArticleAgentSession {
+final class ArticleAgentSession: VoiceAgentSession {
     struct EditRequest: Identifiable, Equatable {
         let id: String          // stable across reconnects/relaunches (sent on the wire)
         let text: String
@@ -35,7 +35,7 @@ final class ArticleAgentSession {
     /// done. Drives the stacked queue UI. The server is the real authority.
     var queue: [EditRequest] = []
 
-    var onUpdate: ((ArticleDoc) -> Void)?
+    var onUpdate: ((ArticleDoc?) -> Void)?
     var onReply: ((String, Bool) -> Void)?
 
     private var task: URLSessionWebSocketTask?
