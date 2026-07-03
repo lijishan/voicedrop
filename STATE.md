@@ -97,6 +97,13 @@ scopes every request to `users/<sub>/`.
   迁移只剥注释未提字段——显示零回归；② legacy 数字图片标记（`[[photo:N]]`）越界时 iOS 跳行
   不计数而 linenum.js 计数——罕见旧数据的编号分歧，未修。
 - Spec：`docs/superpowers/specs/2026-07-03-style-field-schema-design.md`。
+- **无转写文章可重写（2026-07-03）**：合并（`merge_articles`→`writeStandaloneArticle`）、图片分享
+  （看图挖矿）、style-intro 等文章 `transcript:""`，重写/换风格曾在 `restyleArticle`
+  （`agent/src/miner.js`）开头 `no-transcript` 硬失败（422）。现在 transcript 为空时回退用
+  **head 文章正文**当挖矿来源（正文即事实来源；新 doc 的 `transcript` 保持 ""，不伪造）；
+  正文也空才仍报 no-transcript。同时**看图挖矿分支落盘打 `articles[i].style` = 文风 head 版本号**
+  （此前文风文本进了 prompt 但没打字段 → iOS chip 显「选风格」）。测试
+  `agent/test/restyle-body-fallback.test.js` + `mine-image.test.js` 的 style 标记用例。
 
 ## Files API (`jianshuo.dev/files/api/<path>`, Cloudflare Pages Function)
 
