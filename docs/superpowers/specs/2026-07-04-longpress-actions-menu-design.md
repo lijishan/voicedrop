@@ -29,7 +29,9 @@
 
 ```
 长按 PhotoTile（已加载出图的才出菜单）／ 长按段落 Text
-  → 原生 contextMenu：组→Section，submenu→Menu（= 2a 分组 + 2b 二级替换式，系统行为）
+  → 自绘覆盖层 LongpressMenuOverlay（2026-07-04 视觉定稿，替代原定的系统 contextMenu——
+     系统菜单改不了设计稿的暖纸配色/棱角）：正文压暗模糊、被按元素抬起带大投影、
+     暖纸菜单卡 #FAF6EF 圆角13（= 2a 分组 + 组间 7pt 厚分隔 + 2b 二级原位替换带返回行）
   → 点「卡通」／点「更简洁」
   → 指令模板填占位符：
       图片：「把这张图（[[photo:photos/…/45-k2x.jpg]]）转成手绘卡通插画风格，
@@ -101,12 +103,12 @@
 
 - 新文件 `UIConfigStore.swift`：`Codable` 模型 `{schema, pages:[String: Page]}`，`Page {longpress: {image: Menu?, text: Menu?}}`，`Menu {groups:[[Node]]}`，`Node {id, label, type, children?, instruction?}`；未知字段/`type` 静默跳过。
 - 详情页首次出现时 `GET /agent/ui-config`（带 `AuthStore.bearer`），成功则存 UserDefaults 作缓存。兜底链：本次拉取 → 上次缓存 → 内置默认（与服务端 v1 内容一致的硬编码）。长按永远有菜单。
-- 渲染器（配置 → 原生 contextMenu 内容）写成与页面无关的通用组件：输入一个 `Menu` 配置 + 占位符替换闭包，输出 SwiftUI 菜单内容。以后别的页面接同一渲染器。
+- 渲染器（配置 → **自绘菜单卡**，2026-07-04 视觉定稿弃用系统 contextMenu）写成与页面无关的通用组件 `LongpressMenuOverlay`（`ConfigMenu.swift`）：输入 `LongpressPresentation`（被按元素+frame+`Menu` 配置+占位符替换闭包+本地行），按设计稿 2a/2b 渲染（色板/圆角/分隔/返回行全部照 Long Press Actions.dc.html 的 token）。以后别的页面接同一渲染器。
 
 ### 3. iOS：Voice Editor 页挂载（v1 唯一接入点）
 
-- **图片**：菜单实现在 `PhotoTile` 内部（它知道自己的加载状态），**仅 `image != nil` 时**附加 `.contextMenu`——制作中/失败态长按无菜单（编辑一张还没出的图必然失败，直接不给入口）。菜单内容与点选回调由父视图注入；PhotoTile 自己完成 `{{KEY}}` → relKey 替换。
-- **文字**：段落行（`bodyRows` 的 `.paragraph`）附加 `.contextMenu`，用 `longpress.text` 菜单；`{{LINE}}`/`{{QUOTE}}` 由该行的 n 和段落文本替换。**段落行取消 `.textSelection(.enabled)`**（长按选择与 contextMenu 手势冲突），补偿：text 菜单尾部由客户端本地追加「拷贝」项（`UIPasteboard`，不进服务端配置、不走网络）。
+- **图片**：`PhotoTile` **仅 `image != nil` 时**挂长按手势（0.35s）——制作中/失败态长按无菜单（编辑一张还没出的图必然失败，直接不给入口；失败态重试按钮不能被手势层挡住）。回调把已解码图 + tile 的 global frame 交给父视图 `presentImageMenu`，`{{KEY}}` → relKey 在那里替换。
+- **文字**：段落行（`bodyRows` 的 `.paragraph`）挂同样的长按手势 → `presentTextMenu`；`{{LINE}}`/`{{QUOTE}}` 由该行的 n 和段落文本替换。**段落行取消 `.textSelection(.enabled)`**（长按选择与菜单手势冲突），补偿：菜单最后一组由客户端本地追加「拷贝」行（`UIPasteboard`，不进服务端配置、不走网络）。菜单出现时详情页正文 `.blur(3)` + scrim 压暗（设计稿 2a 的背景处理）。
 - 点选 → 成品指令交给现有 `ArticleAgentSession` 指令入队路径（与听写结果同一入口），排队/串行/「正在改」UI 全部复用。**连接生命周期也复用**：若点选时 websocket 尚未建立，按听写路径的既有逻辑先建连再发（菜单路径不自己管连接）。
 - 只在文章详情页生效：`PhotoTile` 与段落行本就只在 RecordingDetailView；社区（`CommunityPhotoTile`）与公开网页不涉及。
 

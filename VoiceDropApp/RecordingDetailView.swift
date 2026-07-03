@@ -39,6 +39,7 @@ struct RecordingDetailView: View {
     @State private var showingInsertPhoto = false
     @State private var showRestyle = false       // 换风格重写 sheet
     @State private var restyling = false         // /agent/restyle in flight
+    @State private var lpMenu: LongpressPresentation?   // 长按操作菜单（自绘覆盖层）
 
     // Undo/redo: versions (oldest-first) + head loaded on open and refreshed after
     // each agent edit. Undo/redo move head locally for instant UI update, then
@@ -141,6 +142,7 @@ struct RecordingDetailView: View {
                 articlePane
             }
         }
+        .blur(radius: lpMenu == nil ? 0 : 3)   // 长按菜单出现时正文压暗模糊（设计稿 2a）
         .background(Theme.readBG.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .bottom) {
@@ -151,6 +153,14 @@ struct RecordingDetailView: View {
         }
         .overlay(alignment: .bottom) { toastView }
         .overlay { if restyling { restylingOverlay } }
+        .overlay {
+            if let m = lpMenu {
+                LongpressMenuOverlay(model: m) {
+                    withAnimation(.easeOut(duration: 0.15)) { lpMenu = nil }
+                }
+                .transition(.opacity)
+            }
+        }
         .sheet(isPresented: $showRestyle) {
             RestyleSheet(versions: settings.styleVersions, currentStyleV: currentStyleV) { v in applyStyle(v) }
                 .presentationDetents([.medium, .large])
@@ -579,18 +589,24 @@ struct RecordingDetailView: View {
             ForEach(bodyRows(a)) { row in
                 switch row {
                 case .paragraph(let n, let text):
-                    // 长按出操作菜单——为此取消了 .textSelection（长按选择与 contextMenu
-                    // 手势冲突），菜单尾部的本地「拷贝」项补偿。
+                    // 长按出操作菜单（自绘覆盖层）——为此取消了 .textSelection（长按
+                    // 选择与菜单手势冲突），菜单尾部的本地「拷贝」项补偿。
                     Text(textAttributed(text))
                         .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
                         .lineSpacing(9)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay {
+                            GeometryReader { geo in
+                                Color.clear.contentShape(Rectangle())
+                                    .onLongPressGesture(minimumDuration: 0.35) {
+                                        presentTextMenu(line: n, text: text, frame: geo.frame(in: .global))
+                                    }
+                            }
+                        }
                         .overlay(alignment: .topLeading) { lineNumber(n, visible: editing) }
-                        .contextMenu { paragraphMenu(line: n, text: text) }
                 case .image(let n, let m, let key):
                     PhotoTile(store: store, relKey: key,
-                              menu: UIConfigStore.shared.imageMenu(page: "voice-editor"),
-                              onInstruction: { agent.enqueue($0, articleIndex: articleIndex) })
+                              onLongPress: { img, frame in presentImageMenu(img, relKey: key, frame: frame) })
                         .overlay(alignment: .topLeading) { lineNumber(n, visible: editing) }
                         .overlay(alignment: .topLeading) { imageBadge(m, visible: editing) }
                 }
@@ -599,23 +615,31 @@ struct RecordingDetailView: View {
         .animation(.easeInOut(duration: 0.2), value: editing)
     }
 
-    /// 长按段落的操作菜单：服务端配置的「改写这段 / 插入图片」+ 客户端本地「拷贝」
+    /// 长按段落 → 自绘操作菜单：服务端配置的「改写这段 / 插入图片」+ 客户端本地「拷贝」
     /// （拷贝不进服务端配置、不走网络）。点选把成品指令交给现有语音编辑队列——
     /// 与口述/插入照片同一入口，排队、串行、「正在改」指示全部复用。
-    @ViewBuilder
-    private func paragraphMenu(line: Int, text: String) -> some View {
-        if let menu = UIConfigStore.shared.textMenu(page: "voice-editor") {
-            ConfigMenuContent(
-                menu: menu,
+    private func presentTextMenu(line: Int, text: String, frame: CGRect) {
+        guard let menu = UIConfigStore.shared.textMenu(page: "voice-editor") else { return }
+        withAnimation(.easeOut(duration: 0.15)) {
+            lpMenu = LongpressPresentation(
+                anchor: .text(text), frame: frame, menu: menu,
                 fill: { UIConfigStore.fill($0, ["LINE": String(line), "QUOTE": Self.quotePrefix(text)]) },
+                onPick: { agent.enqueue($0, articleIndex: articleIndex) },
+                localRows: [LongpressLocalRow(label: "拷贝", systemImage: "doc.on.doc",
+                                              action: { UIPasteboard.general.string = text })]
+            )
+        }
+    }
+
+    /// 长按已出图的配图 → 自绘操作菜单（图片风格）。{{KEY}} 在这里换成该图 relKey。
+    private func presentImageMenu(_ img: UIImage, relKey: String, frame: CGRect) {
+        guard let menu = UIConfigStore.shared.imageMenu(page: "voice-editor") else { return }
+        withAnimation(.easeOut(duration: 0.15)) {
+            lpMenu = LongpressPresentation(
+                anchor: .image(img), frame: frame, menu: menu,
+                fill: { UIConfigStore.fill($0, ["KEY": relKey]) },
                 onPick: { agent.enqueue($0, articleIndex: articleIndex) }
             )
-            Divider()
-        }
-        Button {
-            UIPasteboard.general.string = text
-        } label: {
-            Label("拷贝", systemImage: "doc.on.doc")
         }
     }
 
@@ -899,11 +923,10 @@ final class ArticleShareItem: NSObject, UIActivityItemSource {
 struct PhotoTile: View {
     let store: LibraryStore
     let relKey: String
-    /// 长按操作菜单（服务端 ui-config 下发）+ 点选回调，由父视图注入；缺省 nil =
-    /// 无菜单（其它使用点零行为变化）。仅已出图（image != nil）时才出菜单——
-    /// 制作中/失败态编辑一张还没出的图必然失败，直接不给入口。
-    var menu: UIMenuConfig? = nil
-    var onInstruction: ((String) -> Void)? = nil
+    /// 长按回调（已解码的图 + 该 tile 的 global frame），由父视图注入并呈现自绘菜单；
+    /// 缺省 nil = 无长按行为。仅已出图（image != nil）时手势才挂载——制作中/失败态
+    /// 编辑一张还没出的图必然失败，直接不给入口（失败态的重试按钮也不能被挡）。
+    var onLongPress: ((UIImage, CGRect) -> Void)? = nil
 
     @State private var image: UIImage?
     @State private var failed = false
@@ -939,14 +962,14 @@ struct PhotoTile: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .contextMenu {
-                // 空内容 = 系统不弹菜单（制作中/失败态长按无反应）。
-                if image != nil, let menu, let onInstruction {
-                    ConfigMenuContent(
-                        menu: menu,
-                        fill: { UIConfigStore.fill($0, ["KEY": relKey]) },
-                        onPick: onInstruction
-                    )
+            .overlay {
+                if let img = image, let onLongPress {
+                    GeometryReader { geo in
+                        Color.clear.contentShape(Rectangle())
+                            .onLongPressGesture(minimumDuration: 0.35) {
+                                onLongPress(img, geo.frame(in: .global))
+                            }
+                    }
                 }
             }
             .task(id: "\(relKey)#\(reloadToken)") { await load() }

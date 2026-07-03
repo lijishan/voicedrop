@@ -303,11 +303,13 @@ Deploy: `cd ~/code/jianshuo.dev/agent && npx wrangler deploy`.
   「放在文章最前面」+2.45:1，Claude 自己调 `new_photo` after_line=0；**不传 size 参数**，比例
   由提示词约束——用户定）+ 客户端本地「拷贝」（不进配置）。
 - **iOS**：`UIConfigStore.swift`（Codable 模型 + 详情页出现时拉取 + UserDefaults 缓存 + 与服务端
-  一致的内置兜底，schema>1 保留现值）、`ConfigMenu.swift`（页面无关渲染器 `ConfigMenuContent`：
-  组间 Divider、submenu 递归、未知节点静默跳过）。挂载在 `RecordingDetailView`：PhotoTile 仅
-  `image != nil` 时出菜单（制作中/失败态无入口）；**段落行为挂菜单取消了 `.textSelection`**
-  （手势冲突），「拷贝」项补偿。点选 = `agent.enqueue(...)`（与口述/插入照片同入口，队列/
-  「正在改」/placeholder 全复用）。
+  一致的内置兜底，schema>1 保留现值）、`ConfigMenu.swift` = **自绘覆盖层 `LongpressMenuOverlay`**
+  （2026-07-04 视觉定稿：系统 contextMenu 改不了设计稿的暖纸配色/棱角，弃用）——正文 `.blur(3)`+
+  scrim 压暗、被按元素抬起带大投影、#FAF6EF 菜单卡圆角13、组间 7pt 厚分隔、submenu 原位替换 +
+  灰底返回行（设计稿 `Long Press Actions.dc.html` 2a/2b 的 token 全套）。挂载在
+  `RecordingDetailView`：PhotoTile 仅 `image != nil` 时挂 0.35s 长按手势（制作中/失败态无入口、
+  不挡重试按钮）；**段落行为挂菜单取消了 `.textSelection`**（手势冲突），「拷贝」行补偿。点选 =
+  `agent.enqueue(...)`（与口述/插入照片同入口，队列/「正在改」/placeholder 全复用）。
 - 部署状态：worker 已 deploy + 线上冒烟（401/200 + 菜单内容）；iOS 已 cherry-pick 到 main，
   **真机手测待做**（长按图→卡通→placeholder→出图；段落→更简洁；题图→顶部横幅；拷贝；
   制作中无菜单）。
