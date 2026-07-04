@@ -30,6 +30,8 @@ struct ArticleDoc: Decodable {
     let transcript: String?
     let srt: String?
     let articles: [MinedArticle]?
+    /// Article tags (doc-level; written by voice tag_article or the .tags sidecar).
+    let tags: [String]?
     /// Relative R2 keys for photos taken during this recording session.
     /// e.g. ["photos/2026-06-24-131500/23-k7p.jpg"]  (23 = 第23秒, k7p = 防撞随机尾)
     let photos: [String]?
@@ -284,6 +286,7 @@ final class LibraryStore {
     private var token: String { AuthStore.shared.bearer }
     private var titleCache: [String: String] = [:]   // articleKey -> first article title
     private var coverCache: [String: String] = [:]   // articleKey -> first-photo rel key ("" = article has none)
+    private var tagsCache: [String: [String]] = [:]  // articleKey -> doc tags ([] = article has none)
     private var processingPhase: [String: MiningPhase] = [:]   // stem -> current mining phase (WebSocket)
 
     private struct ListResponse: Decodable {
@@ -306,7 +309,24 @@ final class LibraryStore {
         Task { await load() }
     }
 
+    // Coalesced re-entrancy: load() has many triggers (foreground, pull, WS done,
+    // voice-command update, upload drain) — two interleaved loads used to repaint
+    // the list with un-enriched rows mid-flight. Now a load already running just
+    // queues ONE follow-up pass.
+    private var loadInFlight = false
+    private var loadQueued = false
+
     func load() async {
+        if loadInFlight { loadQueued = true; return }
+        loadInFlight = true
+        defer { loadInFlight = false }
+        repeat {
+            loadQueued = false
+            await loadOnce()
+        } while loadQueued
+    }
+
+    private func loadOnce() async {
         guard !token.isEmpty else { error = "请先登录"; return }
         loading = true; error = nil
         defer { loading = false }
@@ -359,12 +379,8 @@ final class LibraryStore {
             for i in recordings.indices where recordings[i].hasArticles {
                 recordings[i].articleTitle = titleCache[recordings[i].articleKey]
                 recordings[i].coverPhotoKey = coverCache[recordings[i].articleKey].flatMap { $0.isEmpty ? nil : $0 }
+                recordings[i].tags = tagsCache[recordings[i].articleKey].flatMap { $0.isEmpty ? nil : $0 }
             }
-            // Tags come from the articles list summary in ONE call and are applied
-            // fresh on every load — no per-doc cache, so a voice tag_article command
-            // (add or remove) is reflected as soon as the list refreshes.
-            let tagMap = await fetchTagsByStem()
-            for i in recordings.indices { recordings[i].tags = tagMap[recordings[i].stem] }
             await fetchMissingTitles()
         } catch {
             self.error = error.localizedDescription
@@ -379,42 +395,38 @@ final class LibraryStore {
         guard !pending.isEmpty else { return }
         // One doc fetch fills BOTH the title and the first-photo cover icon.
         // cover "" = the article has no photo (cache it so we don't refetch).
-        let found = await withTaskGroup(of: (String, String, String).self) { group -> [(String, String, String)] in
+        let found = await withTaskGroup(of: (String, String, String, [String]).self) { group -> [(String, String, String, [String])] in
             for rec in pending {
                 group.addTask {
-                    guard let doc = await self.fetchDoc(rec), let art = doc.resolvedArticles.first else { return (rec.id, "", "") }
+                    guard let doc = await self.fetchDoc(rec), let art = doc.resolvedArticles.first else { return (rec.id, "", "", []) }
                     let cover = ArticleBody.firstPhotoKey(in: art.body, photos: doc.photos ?? []) ?? ""
-                    return (rec.id, art.title, cover)
+                    return (rec.id, art.title, cover, doc.tags ?? [])
                 }
             }
-            var out: [(String, String, String)] = []
+            var out: [(String, String, String, [String])] = []
             for await t in group where !t.1.isEmpty { out.append(t) }
             return out
         }
-        for (id, title, cover) in found {
+        for (id, title, cover, tags) in found {
             if let idx = recordings.firstIndex(where: { $0.id == id }) {
                 recordings[idx].articleTitle = title
                 titleCache[recordings[idx].articleKey] = title
                 recordings[idx].coverPhotoKey = cover.isEmpty ? nil : cover
                 coverCache[recordings[idx].articleKey] = cover
+                recordings[idx].tags = tags.isEmpty ? nil : tags
+                tagsCache[recordings[idx].articleKey] = tags
             }
         }
     }
 
-    /// stem → tags, from GET /articles (the list summary carries `tags` only for
-    /// articles that have any). Best-effort: on any failure the map is empty and
-    /// rows simply show no tag line.
-    private func fetchTagsByStem() async -> [String: [String]] {
-        struct Resp: Decodable {
-            struct Item: Decodable { let stem: String; let tags: [String]? }
-            let articles: [Item]
+    /// Voice-command completion: the server's `updated` push names exactly which
+    /// stems the command touched — drop those rows' caches so the next load
+    /// refetches their docs (title, cover and tags move together).
+    func invalidateArticleCaches(stems: [String]) {
+        for stem in stems {
+            let key = Recording.articleKey(forStem: stem)
+            titleCache[key] = nil; coverCache[key] = nil; tagsCache[key] = nil
         }
-        guard let url = URL(string: "\(base.absoluteString)/articles") else { return [:] }
-        var req = URLRequest(url: url)
-        req.setBearer(token)
-        guard let (data, resp) = try? await URLSession.shared.data(for: req), resp.isOK,
-              let r = try? JSONDecoder().decode(Resp.self, from: data) else { return [:] }
-        return .init(uniqueKeysWithValues: r.articles.compactMap { i in i.tags.map { (i.stem, $0) } })
     }
 
     private func downloadURL(_ relName: String) -> URL {
@@ -501,6 +513,7 @@ final class LibraryStore {
         _ = await del(rec.emptyKey)
         titleCache[rec.articleKey] = nil   // re-mined article may have a new title
         coverCache[rec.articleKey] = nil   // …and a different (or no) first photo
+        tagsCache[rec.articleKey] = nil    // …and tags travel with the doc
         await dispatchMine()               // trigger a fresh mine cycle now
         await load()
         return true
@@ -637,6 +650,7 @@ final class LibraryStore {
         }
         titleCache[rec.articleKey] = nil   // 标题可能变
         coverCache[rec.articleKey] = nil   // 首图也可能变
+        tagsCache[rec.articleKey] = nil    // 标签随 doc 走，一起重拉
         await load()
     }
 

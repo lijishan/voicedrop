@@ -10,7 +10,7 @@ protocol VoiceAgentSession: AnyObject {
     var state: AgentState { get }
     var queue: [ArticleAgentSession.EditRequest] { get }
     var onReply: ((String, Bool) -> Void)? { get set }
-    var onUpdate: ((ArticleDoc?) -> Void)? { get set }
+    var onUpdate: ((ArticleDoc?, [String]) -> Void)? { get set }
     func enqueue(_ instruction: String, images: [AgentImage], articleIndex: Int)
     func disconnect()
 }

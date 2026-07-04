@@ -134,6 +134,43 @@ final class Uploader {
     /// and removes the local file on success; on persistent failure the file is
     /// left on disk (still 正在上传) for the next drain — it is never lost.
     @discardableResult
+    // MARK: 标签侧车 —— tag 页发起的录音，挖出的文章缺省带该页标签
+
+    /// Local sidecar next to a queued take: Documents/<stem>.tags.json = ["标签"].
+    /// Queued and uploaded WITH the take (as articles/<stem>.tags, BEFORE the
+    /// audio — the audio's arrival is what triggers mining), so the miner folds
+    /// the tag into the article doc at 成文 time.
+    static func tagsSidecarURL(for audio: URL) -> URL {
+        audio.deletingPathExtension().appendingPathExtension("tags.json")
+    }
+
+    static func writeTagsSidecar(for audio: URL, tags: [String]) {
+        guard let data = try? JSONEncoder().encode(tags) else { return }
+        try? data.write(to: tagsSidecarURL(for: audio))
+    }
+
+    /// Best-effort: push the local tags sidecar (if any) to R2 and remove it on
+    /// success. A failure keeps the local file — the next drain retries it.
+    private func uploadTagsSidecar(for audio: URL) async {
+        let local = Self.tagsSidecarURL(for: audio)
+        guard let data = try? Data(contentsOf: local) else { return }
+        let stem = audio.deletingPathExtension().lastPathComponent
+        let endpoint = baseURL
+            .appending(path: "upload")
+            .appending(path: "articles")
+            .appending(path: "\(stem).tags")
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "PUT"
+        req.setBearer(token)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        req.timeoutInterval = 30
+        if let (_, resp) = try? await URLSession.shared.data(for: req),
+           (200..<300).contains(resp.httpStatusCode) {
+            try? FileManager.default.removeItem(at: local)
+        }
+    }
+
     func upload(_ url: URL) async -> Bool {
         guard hasValidToken else {
             lastError = "请先用 Apple 登录"
@@ -143,6 +180,8 @@ final class Uploader {
             lastError = "录音文件损坏，已跳过上传"
             return false
         }
+        // Tag sidecar rides in front of the audio (mining triggers on the audio).
+        await uploadTagsSidecar(for: url)
         let endpoint = baseURL
             .appending(path: "upload")
             .appending(path: url.lastPathComponent)
@@ -169,6 +208,9 @@ final class Uploader {
                     } else {
                         Self.keepLocal(url)
                     }
+                    // The audio is up — this take won't be drained again, so a
+                    // still-lingering tags sidecar has no retry left. Drop it.
+                    try? FileManager.default.removeItem(at: Self.tagsSidecarURL(for: url))
                     // Keep showing this take — now as 待处理 — until the server
                     // list lists it, so the row changes badge in place instead of
                     // vanishing then re-appearing half a second later.

@@ -30,7 +30,9 @@ final class LibraryCommandSession: VoiceAgentSession {
     /// items are text-only; `articleIndex` is unused (always 0).
     var queue: [ArticleAgentSession.EditRequest] = []
 
-    var onUpdate: ((ArticleDoc?) -> Void)?
+    /// (updated doc if the server sent one, stems of the articles the command
+    /// actually touched — the caller invalidates exactly those rows' caches)
+    var onUpdate: ((ArticleDoc?, [String]) -> Void)?
     var onReply: ((String, Bool) -> Void)?
     /// Server wants the user to confirm a risky/ambiguous action before running
     /// it (e.g. deleting an article). UI should show a confirm card; respond
@@ -182,7 +184,7 @@ final class LibraryCommandSession: VoiceAgentSession {
         case "updated":
             // article may be null (e.g. after a library-wide refresh where
             // there's no single article to report back) — the UI just refreshes.
-            onUpdate?(decodeDoc(obj["article"]))
+            onUpdate?(decodeDoc(obj["article"]), (obj["stems"] as? [String]) ?? [])
             if let id { resolve(id) } else if !queue.isEmpty { resolve(queue[0].id) } // old-server fallback
         case "reply":
             if let text = obj["text"] as? String, !text.isEmpty {
@@ -210,7 +212,7 @@ final class LibraryCommandSession: VoiceAgentSession {
     /// anything the server doesn't know about → resend (we were killed before
     /// it landed). Always apply the snapshot's current article, if any.
     private func reconcile(_ obj: [String: Any]) {
-        if let doc = decodeDoc(obj["article"]) { onUpdate?(doc) }
+        if let doc = decodeDoc(obj["article"]) { onUpdate?(doc, []) }
         let serverItems = (obj["queue"] as? [[String: Any]]) ?? []
         var serverStatus: [String: String] = [:]
         for it in serverItems { if let sid = it["id"] as? String, let st = it["status"] as? String { serverStatus[sid] = st } }

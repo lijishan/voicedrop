@@ -35,7 +35,7 @@ final class ArticleAgentSession: VoiceAgentSession {
     /// done. Drives the stacked queue UI. The server is the real authority.
     var queue: [EditRequest] = []
 
-    var onUpdate: ((ArticleDoc?) -> Void)?
+    var onUpdate: ((ArticleDoc?, [String]) -> Void)?
     var onReply: ((String, Bool) -> Void)?
 
     private var task: URLSessionWebSocketTask?
@@ -154,7 +154,7 @@ final class ArticleAgentSession: VoiceAgentSession {
         case "status":
             if (obj["state"] as? String) == "working" { state = .working }
         case "updated":
-            if let doc = decodeDoc(obj["article"]) { onUpdate?(doc) }
+            if let doc = decodeDoc(obj["article"]) { onUpdate?(doc, (obj["stems"] as? [String]) ?? []) }
             if let id { resolve(id) } else if !queue.isEmpty { resolve(queue[0].id) } // old-server fallback
         case "reply":
             if let text = obj["text"] as? String, !text.isEmpty {
@@ -178,7 +178,7 @@ final class ArticleAgentSession: VoiceAgentSession {
     /// anything the server doesn't know about → resend (we were killed before
     /// it landed). Always apply the snapshot's current article.
     private func reconcile(_ obj: [String: Any]) {
-        if let doc = decodeDoc(obj["article"]) { onUpdate?(doc) }
+        if let doc = decodeDoc(obj["article"]) { onUpdate?(doc, (obj["stems"] as? [String]) ?? []) }
         let serverItems = (obj["queue"] as? [[String: Any]]) ?? []
         var serverStatus: [String: String] = [:]
         for it in serverItems { if let sid = it["id"] as? String, let st = it["status"] as? String { serverStatus[sid] = st } }

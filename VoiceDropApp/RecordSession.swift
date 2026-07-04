@@ -7,6 +7,10 @@ import AVFoundation
 /// immediately — the *list* shows it as 正在上传 and does the upload. No separate
 /// uploading screen.
 struct RecordSession: View {
+    /// When launched from a tag tab: the article mined from this take should
+    /// default-carry that tag. Written as a local sidecar at promote time and
+    /// uploaded with the take (survives offline queueing / app restarts).
+    var defaultTag: String? = nil
     /// Dismiss back to the list (after stop, or cancel).
     var onFinish: () -> Void
 
@@ -168,7 +172,8 @@ struct RecordSession: View {
     /// mirror). No upload here — the list drains the queue. Place geocoding is
     /// best-effort and usually instant (location already resolved during the take).
     private func promote(_ take: AudioRecorder.Recording) async {
-        _ = await RecordingPromoter.promote(take, place: await location.placeTag())
+        let url = await RecordingPromoter.promote(take, place: await location.placeTag())
+        if let tag = defaultTag { Uploader.writeTagsSidecar(for: url, tags: [tag]) }
     }
 
     // MARK: Photo capture (hidden)

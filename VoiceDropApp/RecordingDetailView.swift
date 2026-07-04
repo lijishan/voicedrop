@@ -210,7 +210,7 @@ struct RecordingDetailView: View {
     private func connectIfNeeded() async {
         guard !connected, !articles.isEmpty else { return }
         connected = true
-        agent.onUpdate = { [self] newDoc in
+        agent.onUpdate = { [self] newDoc, _ in
             guard let newDoc else { return }
             doc = newDoc
             articleIndex = min(articleIndex, max(0, newDoc.resolvedArticles.count - 1))
@@ -255,7 +255,7 @@ struct RecordingDetailView: View {
         let patched = ArticleDoc(
             id: current.id, sourceAudio: current.sourceAudio, createdAt: current.createdAt,
             transcript: current.transcript, srt: current.srt,
-            articles: entry.articles,
+            articles: entry.articles, tags: current.tags,
             photos: current.photos, title: current.title, body: current.body
         )
         doc = patched

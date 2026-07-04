@@ -54,6 +54,14 @@ struct LibraryView: View {
         return uploading + optimistic + store.recordings
     }
 
+    /// The tag of the page the user is on (nil on 我的录音 / VD社区). A recording
+    /// started here default-carries this tag; voice-command numbering follows
+    /// this page's visible rows.
+    private var currentPageTag: String? {
+        if case .tag(let t) = tab { return t }
+        return nil
+    }
+
     /// Every tag currently on any article, deduped, ordered by the newest
     /// recording that carries it — drives the dynamic tag tabs after VD社区.
     private var allTags: [String] {
@@ -123,7 +131,9 @@ struct LibraryView: View {
             if case .tag(let t) = tab, !tags.contains(t) { tab = .recordings }
         }
         .overlay(alignment: .bottom) {
-            if tab == .recordings {
+            // The red key (record + press-and-hold voice commands) lives on 我的
+            // 录音 AND every tag page — a tag page is the same list, filtered.
+            if tab != .community {
                 recordButton
             } else {
                 EmptyView()
@@ -136,7 +146,7 @@ struct LibraryView: View {
         }
         .navigationDestination(isPresented: $showSettings) { SettingsView(libraryStore: store) }
         .fullScreenCover(isPresented: $showRecord) {
-            RecordSession { showRecord = false; Task { await refresh() } }
+            RecordSession(defaultTag: currentPageTag) { showRecord = false; Task { await refresh() } }
         }
         .task {
             statusSession.onPhase = { stem, phase in store.markPhase(stem: stem, phase: phase) }
@@ -150,7 +160,10 @@ struct LibraryView: View {
             // Library-wide voice-command session: reply bubble + list refresh after
             // an edit lands + a destructive-action confirm prompt.
             command.onReply = { text, ok in commandReply = AgentReply(text: text, ok: ok) }
-            command.onUpdate = { _ in Task { await refresh() } }
+            command.onUpdate = { _, stems in
+                store.invalidateArticleCaches(stems: stems)
+                Task { await refresh() }
+            }
             command.onConfirm = { id, summary in
                 confirmPrompt = (id: id, summary: summary)
                 // A destructive result can land while a hold is still active (the
@@ -569,8 +582,16 @@ struct LibraryView: View {
     /// in `rowCard` 1:1 — both are absolute positions in `store.recordings`
     /// (newest-first). In-flight uploads/optimistic rows aren't real articles yet,
     /// so they're not numbered and can't be targeted by a spoken command.
+    /// The recordings the user can currently see and target by spoken number —
+    /// the full server list on 我的录音, the filtered list on a tag page, so
+    /// "第2篇" always means the second row ON SCREEN.
+    private var commandTargets: [Recording] {
+        guard let t = currentPageTag else { return store.recordings }
+        return store.recordings.filter { $0.tags?.contains(t) ?? false }
+    }
+
     private func currentRefs() -> [LibraryCommandSession.CommandRef] {
-        store.recordings.enumerated().map { i, rec in
+        commandTargets.enumerated().map { i, rec in
             .init(n: i + 1, stem: rec.stem, title: rec.rowTitle)
         }
     }
@@ -579,7 +600,7 @@ struct LibraryView: View {
     /// talk, or nil if `rec` isn't a numbered target (still uploading / not yet
     /// on the server).
     private func commandNumber(for rec: Recording) -> Int? {
-        guard let idx = store.recordings.firstIndex(where: { $0.id == rec.id }) else { return nil }
+        guard let idx = commandTargets.firstIndex(where: { $0.id == rec.id }) else { return nil }
         return idx + 1
     }
 }
