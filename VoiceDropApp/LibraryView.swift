@@ -5,7 +5,7 @@ import UIKit
 /// pure-red record key at the bottom opens the full-screen recording takeover;
 /// the gear pushes Settings. Pulls fresh data on appear and drains any pending
 /// local uploads.
-enum HomeTab { case recordings, community }
+enum HomeTab: Hashable { case recordings, community, tag(String) }
 
 struct LibraryView: View {
     @State private var store = LibraryStore()
@@ -54,6 +54,16 @@ struct LibraryView: View {
         return uploading + optimistic + store.recordings
     }
 
+    /// Every tag currently on any article, deduped, ordered by the newest
+    /// recording that carries it — drives the dynamic tag tabs after VD社区.
+    private var allTags: [String] {
+        var seen = Set<String>(), out: [String] = []
+        for rec in store.recordings {
+            for t in rec.tags ?? [] where seen.insert(t).inserted { out.append(t) }
+        }
+        return out
+    }
+
     // Explicit Binding<Bool> so the SwiftUI view body doesn't pay to type-infer an
     // inline `.init(get:set:)` per alert — a chain of 4 alerts with inline bindings
     // blows the Swift type-checker's budget ("unable to type-check in reasonable time",
@@ -100,9 +110,18 @@ struct LibraryView: View {
         VStack(spacing: 0) {
             topBar
             tabHeader
-            if tab == .recordings { recordingsContent } else { communityContent }
+            switch tab {
+            case .recordings: recordingsContent
+            case .community: communityContent
+            case .tag(let t): tagContent(t)
+            }
         }
         .background(Theme.appBG.ignoresSafeArea())
+        .onChange(of: allTags) { _, tags in
+            // The tab a user is ON can disappear (voice-removed its last tag);
+            // fall back to 我的录音 instead of stranding them on a headless page.
+            if case .tag(let t) = tab, !tags.contains(t) { tab = .recordings }
+        }
         .overlay(alignment: .bottom) {
             if tab == .recordings {
                 recordButton
@@ -216,12 +235,19 @@ struct LibraryView: View {
     // MARK: Tabs (我的录音 / 社区)
 
     private var tabHeader: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 20) {
-            tabLabel("我的录音", .recordings)
-            tabLabel("VD社区", .community)
-            Spacer()
+        // Horizontally scrollable: the two fixed tabs plus one tab per existing
+        // article tag (newest first). With no tags the layout is unchanged.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .firstTextBaseline, spacing: 20) {
+                tabLabel("我的录音", .recordings)
+                tabLabel("VD社区", .community)
+                ForEach(allTags, id: \.self) { t in
+                    tabLabel(t, .tag(t))
+                }
+            }
+            .padding(.horizontal, 22)
         }
-        .padding(.horizontal, 22).padding(.bottom, 10)
+        .padding(.bottom, 10)
     }
 
     private func tabLabel(_ title: String, _ t: HomeTab) -> some View {
@@ -243,15 +269,26 @@ struct LibraryView: View {
     // MARK: List
 
     @ViewBuilder private var recordingsContent: some View {
-        if store.loading && rows.isEmpty {
+        recordingsList(rows, emptyTitle: "还没有录音",
+                       emptyHint: "点下面的红键录一条，过会儿服务器会自动转写并挖成文章。")
+    }
+
+    /// A tag tab's page: the same rows, filtered to articles carrying that tag.
+    @ViewBuilder private func tagContent(_ t: String) -> some View {
+        recordingsList(rows.filter { $0.tags?.contains(t) ?? false },
+                       emptyTitle: "还没有文章", emptyHint: "「\(t)」标签下还没有文章。")
+    }
+
+    @ViewBuilder private func recordingsList(_ list: [Recording], emptyTitle: String, emptyHint: String) -> some View {
+        if store.loading && list.isEmpty {
             Spacer(); ProgressView().tint(Theme.recordRed); Spacer()
-        } else if let err = store.error, rows.isEmpty {
+        } else if let err = store.error, list.isEmpty {
             Spacer(); message("加载失败", err); Spacer()
-        } else if rows.isEmpty {
-            Spacer(); message("还没有录音", "点下面的红键录一条，过会儿服务器会自动转写并挖成文章。"); Spacer()
+        } else if list.isEmpty {
+            Spacer(); message(emptyTitle, emptyHint); Spacer()
         } else {
             List {
-                ForEach(rows) { rec in
+                ForEach(list) { rec in
                     Group {
                         if rec.uploading {
                             rowCard(rec)
