@@ -355,16 +355,20 @@ struct LibraryView: View {
                 HStack(spacing: 9) {
                     if let dt = rec.dateTimeLabel {
                         Text(dt).font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.metaChrome)
+                            .layoutPriority(1)
                     }
                     if let d = rec.durationLabel {
                         Text(d).font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.metaChrome)
+                            .layoutPriority(1)
                     }
-                    statusBadge(rec)
-                }
-                if let tags = rec.tags, !tags.isEmpty {
-                    Text(tags.map { "#" + $0 }.joined(separator: "  "))
-                        .font(.system(size: 11)).foregroundStyle(Theme.metaChrome)
-                        .lineLimit(1).truncationMode(.tail)
+                    // Tags share the meta line; they're the one flexible element,
+                    // so when space runs out THEY truncate, not the date/duration/badge.
+                    if let tags = rec.tags, !tags.isEmpty {
+                        Text(tags.joined(separator: " · "))
+                            .font(.system(size: 12)).foregroundStyle(Theme.metaChrome)
+                            .lineLimit(1).truncationMode(.tail)
+                    }
+                    statusBadge(rec).layoutPriority(1)
                 }
             }
             Spacer(minLength: 6)
