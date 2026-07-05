@@ -510,60 +510,62 @@ struct CommunityPostView: View {
         .buttonStyle(.plain)
     }
 
-    // 设计稿 Reply Display 1d「章节页」：正文结束后底色变深一档的独立章节——
-    // 大标题「回应」+ 数量徽章 + 一句说明，每篇回应一张浅纸卡片（作者·时间 /
-    // 标题 / 两行摘要），点卡片进回应全文。
+    // 设计稿 Reply Display 1a「续文」：回应就是正文的续篇，同一张纸往下读——
+    // 「N 篇回应」分隔线后，每篇回应带左侧细色条 + 作者行，正文直接展开接排；
+    // 长文折叠（8 行），点「继续阅读 ↓」或整块进回应详情页。
     @ViewBuilder private var repliesSection: some View {
         if !replies.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 10) {
-                    Text("回应").font(.system(size: 20, weight: .semibold)).foregroundStyle(Color(hex: "2B2823"))
-                    Text("\(replies.count)")
-                        .font(.system(size: 12.5, weight: .bold)).foregroundStyle(.white)
-                        .padding(.horizontal, 7).frame(minWidth: 22, minHeight: 22)
-                        .background(Theme.accent, in: Capsule())
+                HStack(spacing: 12) {
+                    Rectangle().fill(Color(hex: "DDD5C7")).frame(height: 1)
+                    Text("\(replies.count) 篇回应")
+                        .font(.system(size: 12, weight: .bold)).kerning(2)
+                        .foregroundStyle(Color(hex: "A79F93"))
+                        .layoutPriority(1)
+                    Rectangle().fill(Color(hex: "DDD5C7")).frame(height: 1)
                 }
-                Text("别人读完这篇后写下的文章")
-                    .font(.system(size: 12.5)).foregroundStyle(Color(hex: "8D8578"))
-                    .padding(.top, 4)
-                ForEach(Array(replies.enumerated()), id: \.element.id) { i, reply in
-                    Button { selectedReply = reply } label: { replyCard(reply) }
+                .padding(.top, 30)
+                ForEach(replies) { reply in
+                    Button { selectedReply = reply } label: { replyContinuation(reply) }
                         .buttonStyle(.plain)
-                        .padding(.top, i == 0 ? 16 : 12)
+                        .padding(.top, 26)
                 }
             }
-            .padding(.horizontal, 24).padding(.vertical, 24)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(hex: "EAE2D3"))
-            .overlay(Rectangle().fill(Color(hex: "DBD0BC")).frame(height: 1), alignment: .top)
-            .padding(.horizontal, -20)   // full-bleed：抵消 ScrollView 内容的水平 padding
-            .padding(.top, 30)
         }
     }
 
-    private func replyCard(_ reply: CommunityPost) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(reply.author ?? "匿名")
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
-                Text(communityDate(reply.firstSharedAt))
-                    .font(.system(size: 12)).foregroundStyle(Color(hex: "9A9387"))
+    private func replyContinuation(_ reply: CommunityPost) -> some View {
+        let body = replyPreviews[reply.shareId] ?? ""
+        return HStack(alignment: .top, spacing: 0) {
+            RoundedRectangle(cornerRadius: 1.5).fill(Color(hex: "E8C7B8")).frame(width: 3)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(reply.author ?? "匿名")
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                    Text("回应 · \(communityDate(reply.firstSharedAt))")
+                        .font(.system(size: 12)).foregroundStyle(Color(hex: "9A9387"))
+                }
+                if let title = reply.title, !title.isEmpty {
+                    Text(title)
+                        .font(.system(size: 19, weight: .semibold)).foregroundStyle(Color(hex: "2B2823"))
+                        .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
+                }
+                if !body.isEmpty {
+                    Text(body)
+                        .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
+                        .lineSpacing(8).lineLimit(8)
+                        .padding(.top, 10)
+                }
+                if body.count > 160 {
+                    Text("继续阅读 ↓")
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                        .padding(.top, 10)
+                }
             }
-            if let title = reply.title, !title.isEmpty {
-                Text(title)
-                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(Color(hex: "2B2823"))
-                    .lineSpacing(3).fixedSize(horizontal: false, vertical: true)
-            }
-            if let preview = replyPreviews[reply.shareId], !preview.isEmpty {
-                Text(preview)
-                    .font(.system(size: 14.5)).foregroundStyle(Color(hex: "5C554A"))
-                    .lineSpacing(4).lineLimit(2)
-            }
+            .padding(.leading, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 18).padding(.vertical, 16)
-        .background(Color(hex: "FAF7F1"), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(hex: "E2D8C6"), lineWidth: 1))
     }
 
     /// Fetch each reply's full post once and distill a plain-text preview for its
@@ -586,14 +588,15 @@ struct CommunityPostView: View {
         for (id, p) in found { replyPreviews[id] = p }
     }
 
-    /// Plain-text preview: photo markers and markdown syntax out, whitespace
-    /// collapsed, clipped (2 lines ≈ 60 CJK chars; SwiftUI clamps the rest).
+    /// Plain-text continuation body: photo markers and markdown syntax out,
+    /// whitespace collapsed. Clipped at ~600 chars — the view clamps to 8 lines,
+    /// so this only bounds memory; >160 chars triggers the 继续阅读 affordance.
     nonisolated private static func previewText(_ body: String) -> String {
         var t = body.replacingOccurrences(of: #"\[\[photo:[^\]]+\]\]"#, with: " ", options: .regularExpression)
         t = t.replacingOccurrences(of: #"[#>*`\-]+"#, with: " ", options: .regularExpression)
         t = t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(t.prefix(80))
+        return String(t.prefix(600))
     }
 
     // MARK: Recording bar (visible while recording a response)
