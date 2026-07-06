@@ -170,6 +170,7 @@ final class AuthStore {
         keychainDelete(account: sessionAccount)
         keychainSave(token, account: anonAccount)
         anonToken = token
+        AppGroup.publishBearer(anonToken)   // keep the Share Extension in sync
     }
 
     // MARK: - Keychain (synchronizable = iCloud Keychain)

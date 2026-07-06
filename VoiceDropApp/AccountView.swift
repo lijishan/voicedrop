@@ -10,6 +10,9 @@ struct AccountView: View {
     @State private var showDeleteConfirm = false
     @State private var deleting = false
     @State private var deleteError: String? = nil
+    @State private var showTokenInput = false
+    @State private var tokenInput = ""
+    @State private var tokenInputError = false
 
     private var auth: AuthStore { AuthStore.shared }
     private var recordingCount: Int { store.recordings.count }
@@ -83,6 +86,27 @@ struct AccountView: View {
                 UIPasteboard.general.string = auth.bearer
                 tokenCopied = true
                 Task { try? await Task.sleep(nanoseconds: 1_800_000_000); tokenCopied = false }
+            }
+
+            // Adopt an existing account by pasting its anon_… token (copied from
+            // the other device's 账户 page). Switches this device to that account.
+            Button { tokenInput = ""; showTokenInput = true } label: {
+                Label("输入访问令牌（切换到已有账号）", systemImage: "key.horizontal")
+                    .font(.system(size: 14)).foregroundStyle(Theme.accent)
+            }
+            .buttonStyle(.plain)
+            .alert("输入访问令牌", isPresented: $showTokenInput) {
+                TextField("anon_…", text: $tokenInput)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("切换") { adoptPastedToken() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("粘贴另一台设备「账户 → 访问令牌」复制的 anon_ 令牌，本机将切换到该账号（当前身份会被替换）。")
+            }
+            .alert("令牌无效", isPresented: $tokenInputError) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text("请粘贴以 anon_ 开头的完整访问令牌。")
             }
 
             Rectangle().fill(Theme.dividerInCard).frame(height: 1)
@@ -177,6 +201,16 @@ struct AccountView: View {
         }
     }
 
+
+    /// Paste-in login: adopt the token, refresh everything this view shows,
+    /// and tell the library to reload (same signal the device-link flow sends).
+    private func adoptPastedToken() {
+        let t = tokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.hasPrefix("anon_"), t.count >= 20 else { tokenInputError = true; return }
+        auth.adoptToken(t)
+        NotificationCenter.default.post(name: .vdDidAdoptAccount, object: nil)
+        Task { await store.load() }
+    }
 
     // MARK: Delete account (Apple 5.1.1(v))
 
