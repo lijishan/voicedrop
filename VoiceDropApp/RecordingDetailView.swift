@@ -490,17 +490,21 @@ struct RecordingDetailView: View {
             return
         }
         UIPasteboard.general.string = pack.clipboardText
-        // 图文卡（标题卡+正文分页，刷图可读全文）在前，文章配图跟在后面，总共 ≤9 张。
-        var images = XHSCards.render(title: pack.title, body: pack.body,
-                                     date: recording.dateTimeLabel ?? "")
+        // 原文配图优先、顺序保真：全部原图（≤9）按文章顺序在前；不满 9 张才用
+        // 图文卡（标题卡+正文分页）补空位，原图够 9 张就不放卡。
+        var images: [UIImage] = []
         if !pack.photoKeys.isEmpty, let scope = await store.ownerScope() {
-            for relKey in pack.photoKeys {
-                guard images.count < 9 else { break }   // 小红书一篇最多 9 图
+            for relKey in pack.photoKeys.prefix(9) {   // 小红书一篇最多 9 图
                 if let data = await store.photoData(fullKey: scope + relKey),
                    let img = UIImage(data: data) { images.append(img) }
             }
         }
-        if images.count > 9 { images = Array(images.prefix(9)) }
+        let room = 9 - images.count
+        if room > 0 {
+            let cards = XHSCards.render(title: pack.title, body: pack.body,
+                                        date: recording.dateTimeLabel ?? "")
+            images.append(contentsOf: cards.prefix(room))
+        }
         var saved = 0
         // addOnly 权限 + 等保存真正完成再跳走，权限弹窗不会被切走打断。
         if await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized {
@@ -521,8 +525,14 @@ struct RecordingDetailView: View {
     /// 队列上执行，闭包若继承 View 的 MainActor 隔离，Swift 6 运行时隔离断言会
     /// 直接 SIGTRAP（TestFlight 实测崩溃）。nonisolated 让闭包不带主线程隔离。
     nonisolated private static func saveImagesToPhotos(_ images: [UIImage]) async throws {
+        let base = Date()
         try await PHPhotoLibrary.shared().performChanges {
-            for img in images { PHAssetChangeRequest.creationRequestForAsset(from: img) }
+            for (i, img) in images.enumerated() {
+                let req = PHAssetChangeRequest.creationRequestForAsset(from: img)
+                // 同批保存时间戳几乎相同，相册排序会乱；按序递减 1 秒，
+                // 「最近项目」网格（新→旧）的顺序就 = 文章里的顺序。
+                req.creationDate = base.addingTimeInterval(TimeInterval(-i))
+            }
         }
     }
 
