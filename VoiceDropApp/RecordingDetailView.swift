@@ -490,23 +490,26 @@ struct RecordingDetailView: View {
             return
         }
         UIPasteboard.general.string = pack.clipboardText
-        var saved = 0
+        // 图文卡（标题卡+正文分页，刷图可读全文）在前，文章配图跟在后面，总共 ≤9 张。
+        var images = XHSCards.render(title: pack.title, body: pack.body,
+                                     date: recording.dateTimeLabel ?? "")
         if !pack.photoKeys.isEmpty, let scope = await store.ownerScope() {
-            var images: [UIImage] = []
-            for relKey in pack.photoKeys.prefix(9) {   // 小红书一篇最多 9 图
+            for relKey in pack.photoKeys {
+                guard images.count < 9 else { break }   // 小红书一篇最多 9 图
                 if let data = await store.photoData(fullKey: scope + relKey),
                    let img = UIImage(data: data) { images.append(img) }
             }
-            // addOnly 权限 + 等保存真正完成再跳走，权限弹窗不会被切走打断。
-            if !images.isEmpty,
-               await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized {
-                do {
-                    try await Self.saveImagesToPhotos(images)
-                    saved = images.count
-                } catch { /* 存失败不拦路：文案还在剪贴板 */ }
-            }
         }
-        showToast(saved > 0 ? "文案已复制，\(saved) 张图已存入相册" : "文案已复制")
+        if images.count > 9 { images = Array(images.prefix(9)) }
+        var saved = 0
+        // addOnly 权限 + 等保存真正完成再跳走，权限弹窗不会被切走打断。
+        if await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized {
+            do {
+                try await Self.saveImagesToPhotos(images)
+                saved = images.count
+            } catch { /* 存失败不拦路：文案还在剪贴板 */ }
+        }
+        showToast(saved > 0 ? "文案已复制，\(saved) 张图文卡已存入相册" : "文案已复制")
         if let xhs = URL(string: "xhsdiscover://") {
             UIApplication.shared.open(xhs) { ok in
                 if !ok { Task { @MainActor in showToast("没检测到小红书 App，文案在剪贴板里") } }
