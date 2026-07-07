@@ -135,6 +135,15 @@ struct PushToTalkBar: View {
     var onWillSend: (() -> Void)? = nil
     /// pill 右侧的可选配件（追问星标按钮等）；nil 时保持原单按钮布局。
     var trailing: AnyView? = nil
+    /// 追问展开态：把 pill 包进追问信息卡（题号/跳过/问题/进度）。pill 本体、
+    /// 手势、队列 UI 全都不变——按住它说话就是回答。nil = 普通裸 pill。
+    var wrapPill: ((AnyView) -> AnyView)? = nil
+    /// 口述文本在 enqueue 前的包装（追问展开时把回答包成【回答追问】指令）。
+    var mapInstruction: ((String) -> String)? = nil
+    /// 指令已发出（enqueue 之后）的回调——追问用它当场翻题。
+    var onDidSend: (() -> Void)? = nil
+    /// 空闲态按钮文案（追问展开时换成「按住 说话 回答」）。
+    var idleLabel: String = "按住 说话 修改"
 
     // 上滑取消的手势态，完全是这条 bar 自己的 UI 细节，不需要外部知道。
     @State private var willCancel = false
@@ -150,10 +159,14 @@ struct PushToTalkBar: View {
                 VoiceFeedbackStack(transcript: recording ? dictation.transcript : nil,
                                    reply: agentReply, queue: session.queue, highlightLocators: highlightLocators)
             }
-            HStack(spacing: 10) {
-                pill(recording: recording, working: working)
-                    .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 5)   // float over the body
-                if let trailing { trailing }
+            if let wrapPill {
+                wrapPill(AnyView(pill(recording: recording, working: working)))
+            } else {
+                HStack(spacing: 10) {
+                    pill(recording: recording, working: working)
+                        .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 5)   // float over the body
+                    if let trailing { trailing }
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -176,7 +189,7 @@ struct PushToTalkBar: View {
                 Text("正在改…按住继续说").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
             } else {
                 Image(systemName: "mic").font(.system(size: 16)).foregroundStyle(Theme.ink)
-                Text("按住 说话 修改").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
+                Text(idleLabel).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
             }
         }
         .frame(maxWidth: .infinity)
@@ -206,7 +219,8 @@ struct PushToTalkBar: View {
                     let text = (await dictation.stopAndGetFinal()).trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !text.isEmpty else { return }
                     onWillSend?()
-                    session.enqueue(text, images: [], articleIndex: articleIndex())
+                    session.enqueue(mapInstruction?(text) ?? text, images: [], articleIndex: articleIndex())
+                    onDidSend?()
                 }
             }
     }

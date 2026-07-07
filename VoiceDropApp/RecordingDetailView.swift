@@ -37,10 +37,9 @@ struct RecordingDetailView: View {
     @State private var agent = ArticleAgentSession()
     @State private var dictation = SpeechDictation()
 
-    // 追问：状态机 + 卡片自己的口述通道（独立于主说话条，两边互不串台）+
-    // 织入段落的临时荧光高亮（第N行）。
+    // 追问：状态机 + 织入段落的临时荧光高亮（第N行）。回答用的就是主说话条——
+    // 展开时追问信息把 pill 包起来，按住说话即回答，松手按普通指令发出。
     @State private var followup = FollowupState()
-    @State private var fuDictation = SpeechDictation()
     @State private var highlightLine: Int?
     @State private var connected = false
     @State private var confirmDeleteFromDetail = false
@@ -155,19 +154,7 @@ struct RecordingDetailView: View {
         .background(Theme.readBG.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .bottom) {
-            if !articles.isEmpty {
-                VStack(spacing: 10) {
-                    if followup.sheet == .expanded, !followup.questions(for: articleIndex).isEmpty {
-                        FollowupCard(state: followup, articleIndex: articleIndex, dictation: fuDictation,
-                                     onSubmit: { q, text in submitFollowupAnswer(q, text) },
-                                     onCollapse: { withAnimation(.easeInOut(duration: 0.3)) { followup.sheet = .collapsed } })
-                    }
-                    PushToTalkBar(dictation: dictation, session: agent, highlightLocators: true,
-                                  articleIndex: { articleIndex }, agentReply: agentReply,
-                                  trailing: followupStar)
-                }
-                .animation(.easeInOut(duration: 0.3), value: followup.sheet)
-            }
+            if !articles.isEmpty { bottomBar }
         }
         .overlay(alignment: .bottom) { toastView }
         .overlay { if restyling { restylingOverlay } }
@@ -188,7 +175,7 @@ struct RecordingDetailView: View {
                 emptyReason = await store.fetchEmptyReason(recording)
             } else {
                 doc = await store.fetchDoc(recording)
-                followup.load(doc)   // 有未答追问 → 卡片自动升起（设计① 成文后升起）
+                followup.load(doc)   // 有未答追问 → 说话条右侧亮星标（缺省收起）
             }
             loadingDoc = false
             published = doc?.hasWechatDraft ?? false
@@ -200,7 +187,7 @@ struct RecordingDetailView: View {
                 sharedToCommunity = communityShareId != nil
             }
         }
-        .onDisappear { player.stop(); dictation.stop(); fuDictation.stop(); agent.disconnect() }
+        .onDisappear { player.stop(); dictation.stop(); agent.disconnect() }
         .sheet(isPresented: $showingWechatSettings, onDismiss: {
             if publishAfterSetup {
                 publishAfterSetup = false
@@ -225,6 +212,27 @@ struct RecordingDetailView: View {
         }
     }
 
+    /// 底部说话条。追问展开时：追问信息卡把 pill 包起来，口述包成【回答追问】
+    /// 指令、松手立即入队（普通发信息 UI），当场翻题；平时就是原样的说话条。
+    private var bottomBar: some View {
+        let answering = followup.sheet == .expanded && followup.current(for: articleIndex) != nil
+        let wrap: ((AnyView) -> AnyView)? = answering ? { [self] pill in
+            AnyView(FollowupWrap(state: followup, articleIndex: articleIndex, pill: pill,
+                                 onCollapse: { withAnimation(.easeInOut(duration: 0.3)) { followup.sheet = .collapsed } }))
+        } : nil
+        let mapper: ((String) -> String)? = answering ? { [self] text in followupInstruction(text) } : nil
+        let didSend: (() -> Void)? = answering ? { [self] in followupAnswerSent() } : nil
+        let label: String = answering ? "按住 说话 回答" : "按住 说话 修改"
+        return PushToTalkBar(dictation: dictation, session: agent, highlightLocators: true,
+                             articleIndex: { articleIndex }, agentReply: agentReply,
+                             trailing: followupStar,
+                             wrapPill: wrap,
+                             mapInstruction: mapper,
+                             onDidSend: didSend,
+                             idleLabel: label)
+            .animation(.easeInOut(duration: 0.3), value: followup.sheet)
+    }
+
     /// 说话条右端的追问星标（3b）：收起且本篇还有未答题时出现；答完/跳完自动移除。
     private var followupStar: AnyView? {
         guard followup.sheet == .collapsed else { return nil }
@@ -235,14 +243,16 @@ struct RecordingDetailView: View {
         })
     }
 
-    /// 松开提交口述回答：指令带上问题原文交给现有编辑队列，收尾在 onUpdate。
-    private func submitFollowupAnswer(_ q: FollowupQuestion, _ text: String) {
-        guard let body = articles[safe: articleIndex]?.body else { return }
-        followup.beginAnswer(q, articleIndex: articleIndex, oldBody: body)
-        agent.enqueue(
-            "【回答追问】问题：「\(q.text)」我的口述回答：「\(text)」把回答里的信息织进正文最相关的段落——只用回答里出现的事实，不照抄问题本身、不动无关段落。",
-            articleIndex: articleIndex
-        )
+    /// 追问展开时，主说话条的口述在发出前包成【回答追问】指令（带问题原文）。
+    private func followupInstruction(_ text: String) -> String {
+        guard let q = followup.current(for: articleIndex) else { return text }
+        return "【回答追问】问题：「\(q.text)」我的口述回答：「\(text)」把回答里的信息织进正文最相关的段落——只用回答里出现的事实，不照抄问题本身、不动无关段落。"
+    }
+
+    /// 指令已进队列：当场标 answered + 翻题（之后就是普通发信息 UI）。
+    private func followupAnswerSent() {
+        guard let q = followup.current(for: articleIndex), let body = articles[safe: articleIndex]?.body else { return }
+        followup.answerSent(q, articleIndex: articleIndex, oldBody: body)
     }
 
     /// Open the editing socket + ask for mic/speech once the article is loaded.
@@ -261,7 +271,6 @@ struct RecordingDetailView: View {
             // The reply stays on screen until it's replaced by a newer one or the
             // user taps elsewhere on the page — no auto-dismiss timer.
             agentReply = AgentReply(text: text, ok: ok)
-            if !ok { followup.handleFailure() }
         }
         followup.patch = { [self] id, status in
             Task { await store.patchQuestion(recording, id: id, status: status) }
@@ -277,7 +286,6 @@ struct RecordingDetailView: View {
         // 长按菜单配置：后台拉一次，失败静默（缓存/内置兜底，长按永远有菜单）。
         Task { await UIConfigStore.shared.refresh() }
         await dictation.requestAuth()
-        await fuDictation.requestAuth()
         await loadVersionHistory()
     }
 

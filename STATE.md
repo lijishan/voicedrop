@@ -8,7 +8,7 @@ Last updated: 2026-07-07
 
 - **数据形态**：问题是 `articles/<stem>.json` **doc 顶层 sidecar** `questions:[{id,articleIndex,text,status,createdAt}]`——不进 body、不进 versions，发公众号/分享页/社区/小红书全出口天然不带（曾经的「正文尾——追问——节」方案已废弃，那会全渠道泄漏）。
 - **服务端**（jianshuo.dev repo）：MINE_SYSTEM 让模型在 JSON 里按篇给 `questions` 数组；`miner.js extractFollowups` 收进 doc 顶层（`parseArticles` 还会剥掉误写进正文的尾节兜底）；`PATCH /files/api/articles/<stem>/question` 改状态（元数据写，不铸版本，`article-store.setQuestionStatus`）；CONFIG.json `noFollowups:true` 关掉；重挖整组换新。**坑：Anthropic output_config schema 不支持数组 `maxItems`（线上 400）——上限只能靠 prompt+parse 截断。**
-- **iOS**：`FollowupQuestions.swift`（FollowupState 状态机 + 3a 底部逐题卡片 + 3b 说话条星标收起态 + 3c 绿勾确认行）；回答 = 卡片自己的 SpeechDictation → 现有 `/agent/edit` WS，指令带【回答追问】前缀（agent SYSTEM 认这个前缀做定点织入）；答完 diff 新旧正文找被补段落 → 确认行 + 正文荧光高亮（`highlightLine`）→ `patchQuestion`；7 天未答客户端过滤不再显示；设置 →「成文后追问」开关。设计稿：claude.ai/design 项目 `design_handoff_follow_up_questions/`（README 是完整规格）。
+- **iOS**：`FollowupQuestions.swift`（FollowupState 状态机 + FollowupWrap 包裹卡 + 星标）。**交互（2026-07-07 按用户口述修正）**：缺省收起——只在原「按住 说话 修改」条右侧亮 52×52 星标（角标=未答数）；点星标 → 追问信息（题号/跳过/问题/进度条）**把原 push-to-talk 包起来**（`PushToTalkBar.wrapPill` 插槽），按住的还是原来那个条（文案换「按住 说话 回答」）；**松手立刻按普通指令入队**（`mapInstruction` 包成【回答追问】前缀，agent SYSTEM 认它做定点织入），当场标 answered+翻题，之后就是普通发信息 UI（队列气泡），没有专门等待态；织入落地后 diff 新旧正文对被补段落做几秒荧光高亮（锦上添花，不阻塞）。7 天未答客户端过滤；设置 →「成文后追问」开关。设计稿 `design_handoff_follow_up_questions/` 里 3a 的独立回答按钮和 3c 确认行已被这版交互取代。
 
 ## What it is
 

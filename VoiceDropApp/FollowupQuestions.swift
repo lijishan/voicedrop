@@ -1,14 +1,15 @@
 import SwiftUI
 import Observation
 
-// 追问（follow-up questions）：成文后 AI 针对文章最薄处追问 1–3 题，用户按住说话
-// 回答，回答被 edit agent 织进正文对应段落。设计稿 design_handoff_follow_up_questions
-// 第 3 轮定稿：3a 底部逐题卡片 / 3b 说话条星标收起态 / 3c 回答后确认 + 正文荧光高亮。
+// 追问（follow-up questions）：成文后 AI 针对文章最薄处追问 1–3 题。缺省收起——
+// 只在原「按住 说话 修改」条右侧多一个星标按钮；点开后追问信息（题号/跳过/
+// 问题/进度）把原 push-to-talk 包裹起来，按住的还是原来那个条，松手立刻按
+// 普通指令发出（走现有编辑队列 UI），没有专门的等待态。
 // 问题本体是服务端 doc 顶层 sidecar（ArticleDoc.questions），不进正文、不进版本。
 
 /// 追问的页面状态机。视图注入两个钩子：`patch`（状态回写服务器，fire-and-forget）
-/// 与 `onHighlight`（正文第N行荧光高亮）。回答的织入走现有 edit WebSocket——
-/// 视图 enqueue 指令，`handleUpdated` 在 onUpdate 里收尾（diff → 确认 → 翻题）。
+/// 与 `onHighlight`（正文第N行荧光高亮）。回答就是一条普通编辑指令——发出的
+/// 那一刻标 answered 并翻题；`handleUpdated` 只负责事后 diff 出被补段落做高亮。
 @MainActor
 @Observable
 final class FollowupState {
@@ -17,11 +18,8 @@ final class FollowupState {
     private(set) var all: [FollowupQuestion] = []
     var sheet: Sheet = .dismissed
     var currentId: String?
-    var confirmText: String?          // 3c 绿色确认行（「第 1 题已回答 · 补进了第 2 段」）
-    var failureText: String?          // 「没听清，再试一次」
-    var answering = false             // 提交后等 onUpdate 期间（按钮 spinner）
 
-    struct Pending { let id: String; let ordinal: Int; let articleIndex: Int; let oldBody: String }
+    struct Pending { let articleIndex: Int; let oldBody: String }
     private(set) var pending: Pending?
 
     var patch: ((String, String) -> Void)?     // (questionId, status) → PATCH
@@ -29,17 +27,16 @@ final class FollowupState {
 
     private static let maxAgeMs: Double = 7 * 24 * 3600 * 1000   // 7 天未答自动消失
 
-    /// doc 加载/重挖后同步。追问只属于当前这版：过期的丢掉；有未答题就自动升起
-    /// （设计①「成文后自动升起」——进入成文页即卡片升起，一滑即收）。
+    /// doc 加载/重挖后同步。缺省收起：有未答题只亮星标，绝不自动铺开。
     func load(_ doc: ArticleDoc?) {
         let now = Date().timeIntervalSince1970 * 1000
         all = (doc?.questions ?? []).filter { q in
             guard let t = q.createdAt else { return true }
             return now - t < Self.maxAgeMs
         }
-        confirmText = nil; failureText = nil; answering = false; pending = nil
+        pending = nil
         currentId = all.first { $0.status == "pending" }?.id
-        sheet = all.contains { $0.status == "pending" } ? .expanded : .dismissed
+        sheet = all.contains { $0.status == "pending" } ? .collapsed : .dismissed
     }
 
     // ── 每篇文章各自的题组 ─────────────────────────────────────────────────────
@@ -60,43 +57,31 @@ final class FollowupState {
     }
 
     // ── 动作 ──────────────────────────────────────────────────────────────────
-    /// 跳过当前题：进度段保持灰色，翻下一题；没有下一题就收卡片。
+    /// 跳过当前题：进度段保持灰色，翻下一题；没有下一题就整个收掉。
     func skip(articleIndex: Int) {
         guard let q = current(for: articleIndex) else { return }
         setStatus(q.id, "skipped")
-        confirmText = nil; failureText = nil
         advance(articleIndex: articleIndex)
     }
 
-    /// 松开提交口述回答：记住旧正文供 diff，等 onUpdate 收尾。
-    func beginAnswer(_ q: FollowupQuestion, articleIndex: Int, oldBody: String) {
-        pending = Pending(id: q.id, ordinal: ordinal(of: q, in: articleIndex), articleIndex: articleIndex, oldBody: oldBody)
-        answering = true
-        confirmText = nil; failureText = nil
+    /// 口述回答已作为普通指令发出：当场标 answered、记旧正文供事后高亮、翻题。
+    /// 之后的进展就是普通发信息 UI（队列气泡/正在改），这里不再有等待态。
+    func answerSent(_ q: FollowupQuestion, articleIndex: Int, oldBody: String) {
+        pending = Pending(articleIndex: articleIndex, oldBody: oldBody)
+        setStatus(q.id, "answered")
+        advance(articleIndex: articleIndex)
     }
 
-    /// edit agent 回写成功（onUpdate）：diff 出被补写的段落 → 确认行 + 正文高亮，
-    /// 状态回写 answered，翻下一题；全部答完/跳完 → 短暂停留后收卡片。
+    /// 编辑落地（onUpdate）：diff 出被补写的段落 → 正文荧光高亮。纯锦上添花，
+    /// 不阻塞任何交互。
     func handleUpdated(_ doc: ArticleDoc?) {
         guard let p = pending, let doc else { return }
-        pending = nil; answering = false
+        pending = nil
         let arts = doc.resolvedArticles
         let newBody = (p.articleIndex >= 0 && p.articleIndex < arts.count) ? arts[p.articleIndex].body : ""
-        setStatus(p.id, "answered")
         if let hit = Self.firstChangedRow(old: p.oldBody, new: newBody) {
-            confirmText = "第 \(p.ordinal) 题已回答 · 补进了第 \(hit.paragraph) 段"
             onHighlight?(hit.line)
-        } else {
-            confirmText = "第 \(p.ordinal) 题已回答"
         }
-        advance(articleIndex: p.articleIndex)
-    }
-
-    /// 织入失败（error / reply ok=false）：红字提示，题不翻页。
-    func handleFailure() {
-        guard pending != nil || answering else { return }
-        pending = nil; answering = false
-        failureText = "没听清，再试一次"
     }
 
     private func setStatus(_ id: String, _ status: String) {
@@ -111,17 +96,13 @@ final class FollowupState {
             return
         }
         currentId = nil
-        // 全部答完或全部跳过 → 星标移除；留 1.6s 给确认行，然后收起整张卡。
-        let hadConfirm = confirmText != nil
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: hadConfirm ? 1_600_000_000 : 200_000_000)
-            withAnimation(.easeInOut(duration: 0.25)) { self.sheet = .dismissed }
-        }
+        // 全部答完或全部跳过 → 包裹收掉、星标移除，回到普通说话条。
+        withAnimation(.easeInOut(duration: 0.25)) { sheet = .dismissed }
     }
 
     // ── diff：找口述回答被织进了哪一段 ─────────────────────────────────────────
     /// 行 = 正文按真实换行拆出的非空行（照片标记也占行号，与成文页第N行一致）；
-    /// 段 = 其中的文字行序号（「补进了第 2 段」）。返回第一处不同的行。
+    /// 段 = 其中的文字行序号。返回第一处不同的行。
     static func firstChangedRow(old: String, new: String) -> (line: Int, paragraph: Int)? {
         func rows(_ s: String) -> [String] {
             s.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -138,33 +119,26 @@ final class FollowupState {
     }
 }
 
-// ── 3a：底部逐题卡片 ────────────────────────────────────────────────────────────
+// ── 展开态：追问信息把原 push-to-talk 包裹起来 ─────────────────────────────────
+// pill 由 PushToTalkBar 原样传入——按住它说话就是回答，手势/队列/转写气泡全是
+// 原来那套。这里只负责裹一层卡片：把手 + 追问 N/M + 跳过 + 问题 + 进度条。
 
-struct FollowupCard: View {
+struct FollowupWrap: View {
     let state: FollowupState
     let articleIndex: Int
-    let dictation: SpeechDictation
-    let onSubmit: (FollowupQuestion, String) -> Void
+    let pill: AnyView
     let onCollapse: () -> Void
 
-    @State private var willCancel = false
     @State private var dragOffset: CGFloat = 0
 
     var body: some View {
         let qs = state.questions(for: articleIndex)
         let q = state.current(for: articleIndex)
         VStack(alignment: .leading, spacing: 0) {
-            // 拖动把手（36×4，下滑 = 收起）
+            // 拖动把手（36×4，下滑 = 收起回星标）
             RoundedRectangle(cornerRadius: 2).fill(Theme.fuHandle)
                 .frame(width: 36, height: 4)
                 .frame(maxWidth: .infinity)
-
-            if let confirm = state.confirmText {
-                confirmRow(confirm).padding(.top, 10)
-            }
-            if let failure = state.failureText {
-                failureRow(failure).padding(.top, 10)
-            }
 
             if let q {
                 HStack {
@@ -177,9 +151,8 @@ struct FollowupCard: View {
                             .padding(.vertical, 2).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(state.answering)
                 }
-                .padding(.top, state.confirmText == nil && state.failureText == nil ? 8 : 10)
+                .padding(.top, 8)
 
                 Text(q.text)
                     .font(.system(size: 17, weight: .semibold))
@@ -188,16 +161,25 @@ struct FollowupCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 10)
 
-                answerButton(q).padding(.top, 12)
+                pill.padding(.top, 12)
 
-                progressBar(qs).padding(.top, 12).frame(maxWidth: .infinity)
+                // 分段进度条：每题一段 16×4；绿=已答，橙=当前，灰=未答/跳过。
+                HStack(spacing: 5) {
+                    ForEach(qs) { seg in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(seg.status == "answered" ? Theme.fuGreen
+                                  : (seg.id == q.id ? Theme.accent : Theme.fuBorder))
+                            .frame(width: 16, height: 4)
+                    }
+                }
+                .padding(.top, 12)
+                .frame(maxWidth: .infinity)
             }
         }
         .padding(EdgeInsets(top: 14, leading: 18, bottom: 16, trailing: 18))
         .background(Theme.fuCardBG, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.fuBorder, lineWidth: 1))
         .shadow(color: Color(.sRGB, red: 60/255, green: 48/255, blue: 30/255, opacity: 0.14), radius: 15, x: 0, y: 10)
-        .padding(.horizontal, 12)
         .offset(y: max(dragOffset, 0))
         .gesture(
             DragGesture()
@@ -209,92 +191,9 @@ struct FollowupCard: View {
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
-
-    /// 3c 确认行：绿勾 + 「第 1 题已回答 · 补进了第 2 段」。
-    private func confirmRow(_ text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "checkmark")
-                .font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.fuGreen)
-            Text(text).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.fuGreen)
-        }
-    }
-
-    private func failureRow(_ text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.circle")
-                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Color(hex: "C0392B"))
-            Text(text).font(.system(size: 14, weight: .semibold)).foregroundStyle(Color(hex: "C0392B"))
-        }
-    }
-
-    /// 「按住 说话 回答」：与主说话条同交互（按住录音、松开提交、上滑取消）。
-    /// 录音中显示实时转写；提交后 spinner + 「正在补进文章…」。
-    private func answerButton(_ q: FollowupQuestion) -> some View {
-        let recording = dictation.isRecording
-        return VStack(spacing: 8) {
-            if recording && !dictation.transcript.isEmpty {
-                Text(dictation.transcript)
-                    .font(.system(size: 14)).foregroundStyle(Theme.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(3)
-            }
-            HStack(spacing: 8) {
-                if state.answering {
-                    ProgressView().tint(Theme.secondary).scaleEffect(0.8)
-                    Text("正在补进文章…").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.secondary)
-                } else if recording {
-                    Text(willCancel ? "上滑取消 · 松开放弃" : "松开 提交 · 上滑取消")
-                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
-                } else {
-                    Image(systemName: "mic")
-                        .font(.system(size: 17)).foregroundStyle(Theme.secondary)
-                    Text("按住 说话 回答").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.ink)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.borderRead, lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-            .gesture(holdGesture(q))
-        }
-        .animation(.easeInOut(duration: 0.15), value: recording)
-    }
-
-    private func holdGesture(_ q: FollowupQuestion) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { v in
-                guard !state.answering, dictation.authorized == true else { return }
-                if !dictation.isRecording { dictation.start() }
-                willCancel = v.translation.height < -60
-            }
-            .onEnded { v in
-                guard dictation.isRecording else { willCancel = false; return }
-                let cancel = v.translation.height < -60
-                willCancel = false
-                if cancel { dictation.stop(); return }
-                Task {
-                    let text = (await dictation.stopAndGetFinal()).trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !text.isEmpty else { return }
-                    onSubmit(q, text)
-                }
-            }
-    }
-
-    /// 分段进度条：每题一段 16×4；绿=已答，橙=当前，灰=未答/跳过。
-    private func progressBar(_ qs: [FollowupQuestion]) -> some View {
-        HStack(spacing: 5) {
-            ForEach(qs) { q in
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(q.status == "answered" ? Theme.fuGreen
-                          : (q.id == state.current(for: articleIndex)?.id ? Theme.accent : Theme.fuBorder))
-                    .frame(width: 16, height: 4)
-            }
-        }
-    }
 }
 
-// ── 3b：说话条右端的星标按钮（收起态）──────────────────────────────────────────
+// ── 收起态：说话条右端的星标按钮 ────────────────────────────────────────────────
 
 struct FollowupStarButton: View {
     let remaining: Int
