@@ -289,6 +289,7 @@ struct RecordingDetailView: View {
             doc = newDoc
             articleIndex = min(articleIndex, max(0, newDoc.resolvedArticles.count - 1))
             flashChanges(from: oldArticles, to: newDoc.resolvedArticles)
+            followup.merge(newDoc)   // 「再追问我几个」追加的新题 → 星标接上
             // A new agent edit writes a new version; refresh history and reset to latest.
             Task { await loadVersionHistory() }
         }

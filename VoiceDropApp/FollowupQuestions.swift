@@ -34,6 +34,30 @@ final class FollowupState {
         sheet = all.contains { $0.status == "pending" } ? .collapsed : .dismissed
     }
 
+    /// 编辑落地（onUpdate）带回的 doc 也可能带来新追问（语音「再追问我几个」→
+    /// 服务端 add_followups 追加）。以服务端为基线合并，但本地已推进的状态
+    /// （answered/skipped 的 PATCH 可能还在路上）不回退；出现新的未答题且整组
+    /// 已收场时，重新亮出星标（不自动铺开）。
+    func merge(_ doc: ArticleDoc?) {
+        guard let doc else { return }
+        let now = Date().timeIntervalSince1970 * 1000
+        let localStatus = Dictionary(all.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
+        all = (doc.questions ?? []).filter { q in
+            guard let t = q.createdAt else { return true }
+            return now - t < Self.maxAgeMs
+        }.map { q in
+            var q = q
+            if q.status == "pending", let s = localStatus[q.id], s != "pending" { q.status = s }
+            return q
+        }
+        let hasPending = all.contains { $0.status == "pending" }
+        if currentId == nil { currentId = all.first { $0.status == "pending" }?.id }
+        if hasPending, sheet == .dismissed { sheet = .collapsed }
+        if !hasPending, sheet != .dismissed {
+            withAnimation(.easeInOut(duration: 0.25)) { sheet = .dismissed }
+        }
+    }
+
     // ── 每篇文章各自的题组 ─────────────────────────────────────────────────────
     func questions(for articleIndex: Int) -> [FollowupQuestion] {
         all.filter { ($0.articleIndex ?? 0) == articleIndex }
