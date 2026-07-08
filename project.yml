@@ -63,8 +63,13 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         OTHER_LDFLAGS: "$(inherited) -lz"
       configs:
-        # Manual signing only for the App Store build (CI/fastlane). Debug stays
-        # automatic so local dev / simulator runs need no profile.
+        # Debug = AUTOMATIC signing → local device install uses an Apple *Development*
+        # profile (with the connected device), so `⌘R` to a real phone works with no
+        # manual profile picking and no 0xe800801f "Beta profile" error. Manual match
+        # signing is ONLY for the App Store Release build (CI/fastlane).
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
@@ -106,6 +111,9 @@ targets:
         DEVELOPMENT_TEAM: 97XBW2A43H
         TARGETED_DEVICE_FAMILY: "1"
       configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
