@@ -47,7 +47,15 @@ final class RealtimeInterviewer: RecordingBackend {
 
     var onInterrupted: ((AudioRecorder.Recording) -> Void)? {
         get { engine.onInterrupted }
-        set { engine.onInterrupted = newValue }
+        set {
+            guard let handler = newValue else { engine.onInterrupted = nil; return }
+            engine.onInterrupted = { [weak self] take in
+                // 来电/Siri 中断走 engine 级 stop,这里补上采访侧的收尾:立刻断 relay
+                // (worker 在 WS close 时结算这段计费),别让计费表跟着中断悬空地走。
+                if let self, self.interviewActive { self.stopInterview() }
+                handler(take)
+            }
+        }
     }
 
     /// Start RECORDING only (sacred). The interview is NOT connected here — the user
@@ -70,12 +78,14 @@ final class RealtimeInterviewer: RecordingBackend {
         interviewActive = true
         aiSpeaking = false
         aiTurnEnded = false
+        engine.teeEnabled = true  // Sink starts producing 24k PCM only from here on
         session.connect()       // best-effort; failure = degraded badge, recording continues
     }
 
     private func stopInterview() {
         EngineRecorder.trace("interviewer.stopInterview(): disconnecting relay (recording continues)")
         interviewActive = false
+        engine.teeEnabled = false // Sink stops the resample/tee — plain recording pays nothing
         resumeTask?.cancel(); resumeTask = nil
         muteWatchdog?.cancel(); muteWatchdog = nil
         aiSpeaking = false

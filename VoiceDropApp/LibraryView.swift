@@ -220,8 +220,16 @@ struct LibraryView: View {
         }
         .onReceive(router.$pending.compactMap { $0 }) { link in
             // A deep link (voicedrop://<page>) arrived — apply it, clearing any
-            // pushed detail/settings/record so it lands cleanly, then reset.
-            recordLaunch = nil
+            // pushed detail/settings so it lands cleanly, then reset.
+            // RECORDING IS SACRED: if a take is in progress (cover presented), a deep
+            // link must NOT dismiss it — the old `recordLaunch = nil` here tore down
+            // the cover and onDisappear discarded the un-promoted take (total loss of
+            // however long the user had been speaking). Drop the link instead.
+            guard recordLaunch == nil else {
+                EngineRecorder.trace("deep link ignored — recording in progress")
+                router.pending = nil
+                return
+            }
             switch link {
             case .recordings:
                 tab = .recordings; selectedRec = nil; selectedPost = nil; showSettings = false

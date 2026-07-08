@@ -31,11 +31,22 @@ final class RealtimeSession {
     private var task: URLSessionWebSocketTask?
     private var urlSession: URLSession?
     private var closed = false
+    // Connection generation. The interview is now toggled on/off repeatedly within one
+    // recording, so a CANCELLED task's pending receive-completion can land AFTER the
+    // next connect() has reset `closed` — without this token the stale .failure would
+    // mark the healthy new connection .degraded (and a stale .success could arm a
+    // second receive loop on the new task).
+    private var generation = 0
 
     func connect() {
         EngineRecorder.trace("session.connect(): BEGIN (task==nil? \(task == nil))")
         guard task == nil else { EngineRecorder.trace("session.connect(): SKIP already connected"); return }
+        generation += 1
         closed = false
+        // Per-segment diagnostics: each toggle-on starts fresh, so debugLine reflects
+        // THIS segment's health instead of accumulating across segments.
+        speechEvents = 0
+        audioDeltas = 0
         state = .connecting
         let token = AuthStore.shared.bearer
         guard !token.isEmpty, let url = URL(string: "\(API.agentWS)/realtime/relay") else { EngineRecorder.trace("session.connect(): DEGRADED no token/url"); state = .degraded; return }
@@ -47,14 +58,14 @@ final class RealtimeSession {
         let t = s.webSocketTask(with: req)
         task = t
         t.resume()
-        receive()
+        receive(generation)
         state = .live
     }
 
-    private func receive() {
+    private func receive(_ gen: Int) {
         task?.receive { [weak self] result in
             Task { @MainActor in
-                guard let self, !self.closed else { return }
+                guard let self, gen == self.generation, !self.closed else { return }
                 switch result {
                 case .failure:
                     self.state = .degraded            // relay/network dropped — recording continues (caller guarantees)
@@ -64,7 +75,7 @@ final class RealtimeSession {
                     case .data(let d): if let str = String(data: d, encoding: .utf8) { self.handle(str) }
                     @unknown default: break
                     }
-                    self.receive()
+                    self.receive(gen)
                 }
             }
         }
@@ -111,6 +122,7 @@ final class RealtimeSession {
     }
 
     func disconnect() {
+        generation += 1        // invalidate any in-flight receive completion of this task
         closed = true
         task?.cancel(with: .goingAway, reason: nil)
         task = nil

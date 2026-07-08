@@ -1,8 +1,26 @@
 # VoiceDrop — project state (read this first)
 
-Last updated: 2026-07-07
+Last updated: 2026-07-08
 
-## 最近大改：追问（follow-up questions，2026-07-07 上线）
+## 最近大改：录音后端统一 AVAudioEngine + AI 采访变录音内开关（2026-07-08）
+
+录音与 AI 采访解耦：**所有录音默认走 `EngineRecorder`（AVAudioEngine）**，AI 采访员是录音过程中随时可开关的旁路——录音界面停止键左侧新增「采访」键（与右侧拍照对称），点一下连 relay、再点结束，每段独立计费（worker 在 WS close 结算）。列表里原来的隐藏采访入口已删除。
+
+- **神圣不变量**：tap 里永远先写 m4a 再 tee PCM；采访/半双工/AI 播放只碰 tee 支流，动不到文件。
+- **文件格式整段定格**（2026-07-08 评审修复）：`Sink` 在 start() 就按 `pref.highQuality`（标准 16kHz/32kbps · 高 24kHz/64kbps，同 `Prefs.recorderSettings` 契约）建 AAC 文件，**每个 tap buffer 经持久 `AVAudioConverter` 转进固定格式**——中途换路由（AirPods/蓝牙、采样率变化）只换 converter 输入侧，文件不断不裂。AI tee 也走持久 converter（相位跨 buffer 连续）。
+- **路由切换恢复**：`AVAudioEngineConfigurationChange` → 拆 tap → 停引擎 → 按新原生格式重装 tap → 重启（老代码带旧格式 tap 重启会 NSException 崩溃）；播放引擎同时 tearDown，下一段 AI 音频懒重启。
+- **半双工排水计数带 generation token**：`player.stop()` 会异步触发所有排队 buffer 的完成回调，旧 generation 的递减一律丢弃，防止快速关/开采访时新段计数被污染 → 提前开麦自听循环。
+- **错误可见 + 不 promote 幽灵**：`engineError` 在普通录音界面也显示（不再只在采访 overlay）；stop() 校验文件存在，不存在返回 nil → UI 显示「录音失败」，绝不无声吞录音。
+- **RealtimeSession 每段 generation + 计数复位**：采访反复开关时旧 WS 回调不再把新会话标 degraded，debugLine 只反映当前段。
+- **中断（来电）先关 relay 再交 take**（onInterrupted 包装），计费不悬空。
+- **深链不打断录音**：录音进行中收到 voicedrop:// 深链直接丢弃（以前会 dismiss cover 丢整段录音）。
+- **tee 门控**：`teeEnabled` 关闭时 Sink 不做重采样/不 hop 主线程——普通录音零采访开销；level/tapBuffers 走 100ms tick 读原子快照，不再每 buffer 两次主线程 Task。
+- **逃生门**：设置 → 数据与备份 → 「经典录音引擎」（`Prefs.classicRecorder`）切回 AVAudioRecorder（无采访键）。**新引擎稳定一两个版本后删掉此开关和分支。** `classic` 在 RecordSession 里用 @State 定格整段会话。
+- **半双工背景**：设备上 VPIO/AEC 不可用（tap 0 buffers，已穷尽排查），AI 说话时静音上行、response.done+播放排空+400ms 尾巴后恢复。AI 声音会进录音（用户已接受）。
+- **已知遗留**：RecordSession 里 classic/engine 仍是 if/else 分支（RecordingBackend 协议未完全启用——刻意不在稳定期重构）；真机需验证：录音中插拔 AirPods 前后段都在、采访中拔耳机不崩、AI 说话中关/开采访无卡麦。
+- **服务端**：relay 在 voicedrop-agent worker `/agent/realtime/relay`（WS 中转 OpenAI gpt-realtime-2.1，key 不落设备，`response.done.usage` 计费）；采访员提示词在 `agent/src/realtime.js`（名字叫 VoiceDrop，默认沉默、卡住才插话）。
+
+## 上一个大改：追问（follow-up questions，2026-07-07 上线）
 
 成文后 AI 按篇追问 1–3 个「只有作者知道」的细节，作者按住说话回答，回答被织进正文。
 

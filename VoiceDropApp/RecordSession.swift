@@ -23,7 +23,10 @@ struct RecordSession: View {
     enum Phase: Equatable { case starting, denied, recording, failed(String) }
 
     /// Escape hatch (Prefs.classicRecorder): true = old AVAudioRecorder path.
-    private let classic = Prefs.shared.classicRecorder
+    /// @State (not a plain let) PINS the choice for the whole session: the View struct
+    /// is re-initialized on every parent re-render, and a mid-take pref flip would
+    /// otherwise route stop()/onDisappear to the backend that never started.
+    @State private var classic = Prefs.shared.classicRecorder
     @State private var recorder = AudioRecorder()
     @State private var interviewer = RealtimeInterviewer()
     @State private var location = LocationTagger()
@@ -77,13 +80,20 @@ struct RecordSession: View {
             // separate Date() — it drifts across a second boundary).
             do {
                 if classic { try recorder.start(); sessionStart = recorder.startDate }
-                else { try interviewer.start(); sessionStart = interviewer.engine.startDate }
+                else { try interviewer.start(); sessionStart = interviewer.startDate }
                 phase = .recording
                 EngineRecorder.trace("task: phase=.recording SET")
             }
             catch { EngineRecorder.trace("task: CATCH \(error.localizedDescription)"); phase = .failed("无法开始录音：\(error.localizedDescription)") }
         }
-        .onDisappear { if classic { _ = recorder.stop() } else { _ = interviewer.stop() } }
+        .onDisappear {
+            // Safety net: any teardown path that didn't run stop() (a future dismissal
+            // route, cover replacement) must still promote the take — recording is
+            // sacred. The normal stop() already consumed it, so this is nil then.
+            if let take = classic ? recorder.stop() : interviewer.stop() {
+                Task { await promote(take) }
+            }
+        }
         .fullScreenCover(isPresented: $showCamera) {
             // The camera stays open for continuous shooting; shots collect in a
             // filmstrip (deletable) and are all uploaded when the user taps 完成.
@@ -116,6 +126,16 @@ struct RecordSession: View {
                     Text(interviewer.debugLine)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Theme.faint).padding(.top, 2)
+                }
+                // Engine faults must be visible in EVERY take, not only while interviewing —
+                // the engine backend records all plain memos now, and a silent capture
+                // failure with a happily ticking stopwatch is unrecoverable data loss.
+                if !classic, !interviewer.interviewActive, let err = interviewer.engine.engineError {
+                    Text("⚠️ \(err)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.recordRed)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32).padding(.top, 2)
                 }
             }
             .padding(.top, 64)
@@ -158,6 +178,7 @@ struct RecordSession: View {
                                 .offset(y: 42)
                         }
                         .accessibilityLabel("拍照")
+                        .accessibilityAddTraits(.isButton)
                         .offset(x: 98)   // 右侧空白区水平中点 ≈ 屏宽 75%（中线右移 25%）
                 }
                 // 采访 toggle — mirrors 拍照 on the LEFT of the 停止 key. Tap to connect the
@@ -181,6 +202,7 @@ struct RecordSession: View {
                                     .offset(y: 42)
                             }
                             .accessibilityLabel(interviewer.interviewActive ? "结束采访" : "开始采访")
+                            .accessibilityAddTraits(.isButton)
                             .offset(x: -98)   // 左侧空白区水平中点，与右侧拍照对称
                     }
                 }
@@ -229,7 +251,14 @@ struct RecordSession: View {
 
     private func stop() async {
         let take = classic ? recorder.stop() : interviewer.stop()
-        guard let take else { onFinish(); return }
+        guard let take else {
+            // Engine refused to hand over a take (e.g. the m4a was never created).
+            // Show a REAL failure instead of silently closing as if nothing happened.
+            if !classic, let err = interviewer.engine.engineError {
+                phase = .failed("录音失败：\(err)")
+            } else { onFinish() }
+            return
+        }
         await promote(take)
         onFinish()                    // close — the list shows 正在上传 and uploads
     }
