@@ -60,10 +60,14 @@ final class EngineRecorder: RecordingBackend {
         try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker])
         try session.setActive(true)
 
+        // NOTE: voice-processing AEC was REMOVED here — enabling it silently killed the
+        // input tap (tap 0 buffers on device), breaking recording + the AI uplink. We
+        // now use the proven VoiceEdit capture path. Trade-off: without AEC the AI's
+        // loudspeaker audio leaks into the recording, so use earphones for a clean take.
+        // (AEC to be reintroduced carefully once the pipeline is confirmed working.)
         let input = engine.inputNode
-        try? input.setVoiceProcessingEnabled(true)          // AEC/AGC/NS (best-effort)
 
-        // AI playback path through the engine (gives voice-processing its reference signal).
+        // AI playback node through the engine mixer → output.
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: EngineRecorder.aiFormat)
 
@@ -72,8 +76,9 @@ final class EngineRecorder: RecordingBackend {
         // Sink creates the AAC file LAZILY from the first buffer's own format, so the
         // file always matches what the tap delivers — no format guessing, no mismatch.
         let s = Sink(url: url, aiRate: EngineRecorder.aiRate)
+        s.onRawTap = { [weak self] in Task { @MainActor in self?.tapBuffers += 1 } }   // EVERY tap callback
         s.onTee = { [weak self] pcm, lvl in
-            Task { @MainActor in self?.tapBuffers += 1; self?.level = lvl; self?.onPCM?(pcm) }
+            Task { @MainActor in self?.level = lvl; self?.onPCM?(pcm) }
         }
         s.onError = { [weak self] msg in Task { @MainActor in self?.engineError = msg } }
         sink = s
@@ -147,6 +152,7 @@ final class EngineRecorder: RecordingBackend {
         private let aiRate: Double
         private var file: AVAudioFile?      // created lazily from the first buffer's format
         private var failed = false
+        var onRawTap: (@Sendable () -> Void)?
         var onTee: (@Sendable (Data, Double) -> Void)?
         var onError: (@Sendable (String) -> Void)?
         init(url: URL, aiRate: Double) { self.url = url; self.aiRate = aiRate }
@@ -154,6 +160,7 @@ final class EngineRecorder: RecordingBackend {
         func makeTapBlock() -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
             { [weak self] buffer, _ in
                 guard let self else { return }
+                self.onRawTap?()                                         // count the raw callback
                 // Lazily open the AAC file using the buffer's ACTUAL format → processingFormat
                 // always matches, so write(from:) never fails on a format mismatch.
                 if self.file == nil && !self.failed {
