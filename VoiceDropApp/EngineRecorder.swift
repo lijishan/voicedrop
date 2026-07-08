@@ -40,7 +40,12 @@ final class EngineRecorder: RecordingBackend {
     nonisolated static let aiFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                                     sampleRate: 24_000, channels: 1, interleaved: false)!
 
-    private let engine = AVAudioEngine()
+    // TWO separate engines. A single full-duplex engine (input tap + output player)
+    // left the input side un-pulled → tap 0 buffers on device. Splitting into a
+    // capture-only engine (identical to VoiceEdit's proven pattern) + a playback-only
+    // engine makes each single-purpose and reliable. They share one AVAudioSession.
+    private let captureEngine = AVAudioEngine()
+    private let playbackEngine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private var sink: Sink?
     private var currentURL: URL?
@@ -60,21 +65,12 @@ final class EngineRecorder: RecordingBackend {
         try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker])
         try session.setActive(true)
 
-        // NOTE: voice-processing AEC was REMOVED here — enabling it silently killed the
-        // input tap (tap 0 buffers on device), breaking recording + the AI uplink. We
-        // now use the proven VoiceEdit capture path. Trade-off: without AEC the AI's
-        // loudspeaker audio leaks into the recording, so use earphones for a clean take.
-        // (AEC to be reintroduced carefully once the pipeline is confirmed working.)
-        let input = engine.inputNode
-
-        // AI playback node through the engine mixer → output.
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: EngineRecorder.aiFormat)
+        // NOTE: no voice-processing AEC (it killed the input tap). Without AEC the AI's
+        // loudspeaker leaks into the recording → use earphones for a clean take.
 
         let now = Date()
         let url = AudioRecorder.stagingURL(start: now)
-        // Sink creates the AAC file LAZILY from the first buffer's own format, so the
-        // file always matches what the tap delivers — no format guessing, no mismatch.
+        // Sink creates the AAC file LAZILY from the first buffer's own format.
         let s = Sink(url: url, aiRate: EngineRecorder.aiRate)
         s.onRawTap = { [weak self] in Task { @MainActor in self?.tapBuffers += 1 } }   // EVERY tap callback
         s.onTee = { [weak self] pcm, lvl in
@@ -85,11 +81,20 @@ final class EngineRecorder: RecordingBackend {
         currentURL = url
         startInstant = now
 
-        // format: nil → the input node's NATIVE format (guaranteed to deliver buffers).
+        // 1) CAPTURE engine — tap only, identical to VoiceEdit (proven to deliver buffers).
+        //    format: nil = the input node's native format.
+        let input = captureEngine.inputNode
         input.installTap(onBus: 0, bufferSize: 4096, format: nil, block: s.makeTapBlock())
-        engine.prepare()
-        try engine.start()
-        player.play()
+        captureEngine.prepare()
+        try captureEngine.start()
+
+        // 2) PLAYBACK engine — player → mixer → output, fully separate graph. If this
+        //    fails, capture still runs (recording + AI uplink unaffected).
+        playbackEngine.attach(player)
+        playbackEngine.connect(player, to: playbackEngine.mainMixerNode, format: EngineRecorder.aiFormat)
+        playbackEngine.prepare()
+        do { try playbackEngine.start(); player.play() }
+        catch { engineError = "播放引擎启动失败: \(error.localizedDescription)" }
 
         startDate = now
         isRecording = true
@@ -102,9 +107,10 @@ final class EngineRecorder: RecordingBackend {
     @discardableResult
     func stop() -> AudioRecorder.Recording? {
         guard isRecording, let url = currentURL, let start = startInstant else { return nil }
-        engine.inputNode.removeTap(onBus: 0)
+        captureEngine.inputNode.removeTap(onBus: 0)
+        if captureEngine.isRunning { captureEngine.stop() }
         player.stop()
-        if engine.isRunning { engine.stop() }
+        if playbackEngine.isRunning { playbackEngine.stop() }
         sink = nil                    // release/close the file
         stopTicking()
         isRecording = false
