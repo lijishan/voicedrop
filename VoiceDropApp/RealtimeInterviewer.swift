@@ -2,16 +2,20 @@ import Foundation
 import Observation
 
 /// Orchestrates a realtime AI-interviewer recording session: owns the
-/// `EngineRecorder` (single full-duplex engine with AEC) and the `RealtimeSession`
-/// (relay WS). Wires mic PCM → relay and AI audio → speaker.
+/// `EngineRecorder` (two-engine, no VPIO — VPIO gave 0 mic buffers on iOS 26 / this
+/// device after exhaustive attempts) and the `RealtimeSession` (relay WS). Wires mic
+/// PCM → relay and AI audio → speaker.
 ///
-/// Turn-taking is now fully SERVER/PROMPT-driven (2026-07-08): the worker configures
-/// `semantic_vad` + `create_response:true` + `interrupt_response:true`, and the
+/// Turn-taking is SERVER/PROMPT-driven (2026-07-08): the worker configures
+/// `semantic_vad` + `create_response:true` + `interrupt_response:false`, and the
 /// interviewer instructions tell the model to stay silent and only interject a brief
-/// question when the speaker is stuck. So there is NO app-side timer / rate-limit /
-/// barge-in logic here — the app just streams mic up and plays AI down. AEC keeps the
-/// AI's own voice out of the mic, so the model hears only the user (real barge-in via
-/// interrupt_response; no echo self-interruption).
+/// question when the speaker is stuck. No app-side timer / rate-limit here.
+///
+/// HALF-DUPLEX (no AEC): the AI's loudspeaker leaks into the mic, so while the AI is
+/// speaking we PAUSE the mic uplink (mute) and resume after a short echo tail — this
+/// stops the model hearing its own voice (which would loop or cut its turn short).
+/// Trade-off: you can't barge-in mid-AI-turn, but AI turns are short (<5 s). AI audio
+/// in the recording is acceptable (user-confirmed).
 ///
 /// Recording is sacred: `engine.start()` runs first; the relay is best-effort and any
 /// failure just degrades (recording continues). Billing is server-side.
@@ -23,14 +27,10 @@ final class RealtimeInterviewer {
 
     private(set) var connState: RealtimeSession.State = .idle
 
-    /// Diagnostics for the on-screen overlay (realtime mode). Includes the AEC report
-    /// (VPIO enable result, input format pre/post, tap-count timeline) for the AEC probe.
+    /// One-line diagnostics for the on-screen overlay (realtime mode).
     var debugLine: String {
-        var s = "WS \(connState.rawValue) · 语音 \(session.speechEvents) · AI音 \(session.audioDeltas)\n"
-        s += engine.vpioLine + " · " + engine.fmtLine + "\n"
-        s += engine.tapTimeline
-        if let e = engine.engineError { s += "\n⚠️ " + e }
-        return s
+        "tap \(engine.tapBuffers) · WS \(connState.rawValue) · 语音 \(session.speechEvents) · AI音 \(session.audioDeltas)"
+            + (engine.engineError.map { " · ⚠️\($0)" } ?? "")
     }
 
     // Half-duplex: no AEC on device (VPIO killed the tap), so the AI's loudspeaker leaks
