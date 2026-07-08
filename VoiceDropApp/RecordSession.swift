@@ -58,9 +58,12 @@ struct RecordSession: View {
             }
         }
         .task {
+            EngineRecorder.log.info("RecordSession.task BEGIN realtime=\(realtime)")
             let onInt: (AudioRecorder.Recording) -> Void = { take in Task { await promote(take); onFinish() } }
             if realtime { interviewer.onInterrupted = onInt } else { recorder.onInterrupted = onInt }
+            EngineRecorder.log.info("RecordSession.task ensurePermission BEGIN (perm=\(AVAudioApplication.shared.recordPermission.rawValue))")
             let granted = await AudioRecorder.ensurePermission()
+            EngineRecorder.log.info("RecordSession.task ensurePermission END granted=\(granted)")
             guard granted else { phase = .denied; return }
             // Pre-warm the audio route so the FIRST cold start isn't laggy (第一次卡顿).
             // Activating the session + a short settle happens here while the spinner shows,
