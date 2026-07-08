@@ -2,23 +2,23 @@ import Foundation
 @preconcurrency import AVFoundation
 import Observation
 
-/// AVAudioEngine recording backend, used ONLY in realtime (AI) mode. Produces the
-/// SAME staging `recording-<ts>.m4a` (AAC mono, `Prefs.recorderSettings`) as
-/// `AudioRecorder`, so promote/upload downstream is unchanged. Additionally:
+/// AVAudioEngine recording backend, used ONLY in realtime (AI) mode. Produces a
+/// valid AAC mono `recording-<ts>.m4a` (same staging name as `AudioRecorder`), so
+/// promote/upload downstream is unchanged. Additionally:
 ///   • tees the mic PCM (resampled to 24 kHz Int16) to `onPCM` for the AI uplink,
 ///   • enables voice-processing AEC so the AI's loudspeaker audio is cancelled out
-///     of the mic before it's written to the file (keeps the recording clean),
-///   • plays AI audio via an `AVAudioPlayerNode` routed through the engine mixer,
-///     so the AEC reference signal is present.
+///     of the mic before it's written to the file,
+///   • plays AI audio via an `AVAudioPlayerNode` routed through the engine mixer.
 ///
-/// The mic tap runs on a realtime audio thread, NOT the main actor — so the file
-/// write + resample live in a `@unchecked Sendable` `Sink` (mirrors `VoiceEdit`'s
-/// `VolcAudioStreamer`); only `level`/`onPCM` hop back to the main actor.
+/// CRITICAL (fixed 2026-07-08): the mic tap MUST use the input node's NATIVE format
+/// (read after enabling voice processing). Installing a tap with a mismatched format
+/// (e.g. the 24 kHz file format while hardware is 48 kHz) silently delivers ZERO
+/// buffers on iOS 26 — no crash, timer runs, but nothing is captured (no file, no
+/// PCM to OpenAI, so the AI never hears anything and stays silent). We therefore
+/// record the file at the native rate and hand-resample the 24 kHz tee separately.
 ///
-/// DEVICE-VERIFY (Task 2/3 gate, simulator ≠ device):
-///   1) the .m4a is valid, glitch-free, equivalent to AudioRecorder's;
-///   2) AEC actually keeps AI voice out of the file;
-///   3) AI playback is intelligible. Iterate on a real phone.
+/// The tap runs on a realtime audio thread (NOT main actor): the file write + resample
+/// live in a `@unchecked Sendable` `Sink` (mirrors `VoiceEdit`'s `VolcAudioStreamer`).
 @MainActor
 @Observable
 final class EngineRecorder: RecordingBackend {
@@ -32,6 +32,9 @@ final class EngineRecorder: RecordingBackend {
     var onPCM: ((Data) -> Void)?
 
     static let aiRate: Double = 24_000
+    /// Fixed format for AI playback buffers; the engine mixer resamples to hardware.
+    nonisolated static let aiFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                                    sampleRate: 24_000, channels: 1, interleaved: false)!
 
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
@@ -39,7 +42,6 @@ final class EngineRecorder: RecordingBackend {
     private var currentURL: URL?
     private var startInstant: Date?
     private var tickTask: Task<Void, Never>?
-    private var playerFormat: AVAudioFormat?
 
     init() {
         NotificationCenter.default.addObserver(
@@ -51,23 +53,36 @@ final class EngineRecorder: RecordingBackend {
 
     func start() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers, .defaultToSpeaker])
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.duckOthers, .defaultToSpeaker])
         try session.setActive(true)
 
         let input = engine.inputNode
-        try? input.setVoiceProcessingEnabled(true)      // AEC/AGC/NS; must precede wiring
+        try? input.setVoiceProcessingEnabled(true)          // AEC/AGC/NS; before wiring + before reading format
 
-        // AI playback path THROUGH the engine (gives voice-processing the reference).
+        // NATIVE input format, read AFTER voice processing is enabled. Using this
+        // exact format for the tap is what makes buffers actually flow.
+        let tapFormat = input.outputFormat(forBus: 0)
+        guard tapFormat.sampleRate > 0, tapFormat.channelCount > 0 else {
+            throw NSError(domain: "VoiceDrop.EngineRecorder", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "麦克风输入不可用"])
+        }
+
+        // AI playback path through the engine (gives voice-processing its reference signal).
         engine.attach(player)
-        let mixerFormat = engine.mainMixerNode.outputFormat(forBus: 0)
-        playerFormat = mixerFormat
-        engine.connect(player, to: engine.mainMixerNode, format: mixerFormat)
+        engine.connect(player, to: engine.mainMixerNode, format: EngineRecorder.aiFormat)
 
-        // Open the AAC file; install the tap in the file's processingFormat so
-        // `write(from:)` matches directly (the engine converts mic → that format).
+        // AAC file at the NATIVE rate/channels so `file.processingFormat == tapFormat`
+        // and `write(from:)` accepts the tap buffers directly (no conversion, no throw).
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: tapFormat.sampleRate,
+            AVNumberOfChannelsKey: Int(tapFormat.channelCount),
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+        ]
         let now = Date()
         let url = AudioRecorder.stagingURL(start: now)
-        let file = try AVAudioFile(forWriting: url, settings: Prefs.shared.recorderSettings)
+        let file = try AVAudioFile(forWriting: url, settings: settings)
+
         let s = Sink(file: file, aiRate: EngineRecorder.aiRate)
         s.onTee = { [weak self] pcm, lvl in
             Task { @MainActor in self?.level = lvl; self?.onPCM?(pcm) }
@@ -76,7 +91,7 @@ final class EngineRecorder: RecordingBackend {
         currentURL = url
         startInstant = now
 
-        input.installTap(onBus: 0, bufferSize: 4096, format: file.processingFormat, block: s.makeTapBlock())
+        input.installTap(onBus: 0, bufferSize: 4096, format: tapFormat, block: s.makeTapBlock())
         engine.prepare()
         try engine.start()
         player.play()
@@ -105,11 +120,9 @@ final class EngineRecorder: RecordingBackend {
         return take
     }
 
-    /// Play a chunk of AI speech (mono Int16 LE @ 24 kHz) through the engine.
+    /// Play a chunk of AI speech (mono Int16 LE @ 24 kHz) through the engine mixer.
     func playAI(_ pcm16le24k: Data) {
-        guard isRecording, let outFormat = playerFormat,
-              let buffer = EngineRecorder.makeBuffer(fromInt16: pcm16le24k, inRate: EngineRecorder.aiRate, outFormat: outFormat)
-        else { return }
+        guard isRecording, let buffer = EngineRecorder.makeAIBuffer(pcm16le24k) else { return }
         player.scheduleBuffer(buffer, completionHandler: nil)
         if !player.isPlaying { player.play() }
     }
@@ -166,14 +179,14 @@ final class EngineRecorder: RecordingBackend {
         return Double(max(0, min(1, (db + 50) / 50)))
     }
 
+    /// Mono Int16 LE @ outRate from any input buffer (float or int16, any rate/channels).
     nonisolated static func resampleToInt16(_ buffer: AVAudioPCMBuffer, outRate: Double) -> Data? {
         let inRate = buffer.format.sampleRate
         let frames = Int(buffer.frameLength)
         let chans = Int(buffer.format.channelCount)
         guard inRate > 0, frames > 0, chans > 0 else { return nil }
         let outFrames = max(1, Int(Double(frames) * outRate / inRate))
-        var out = [Int16]()
-        out.reserveCapacity(outFrames)
+        var out = [Int16](); out.reserveCapacity(outFrames)
         if let ch = buffer.floatChannelData {
             for i in 0..<outFrames {
                 let pos = Double(i) * inRate / outRate
@@ -197,23 +210,15 @@ final class EngineRecorder: RecordingBackend {
         return out.withUnsafeBufferPointer { Data(buffer: $0) }
     }
 
-    nonisolated static func makeBuffer(fromInt16 data: Data, inRate: Double, outFormat: AVAudioFormat) -> AVAudioPCMBuffer? {
-        let inCount = data.count / MemoryLayout<Int16>.size
-        guard inCount > 0, let ch0 = outFormat.channelCount as AVAudioChannelCount?, ch0 > 0 else { return nil }
-        let samples = data.withUnsafeBytes { raw -> [Int16] in Array(raw.bindMemory(to: Int16.self)) }
-        let outRate = outFormat.sampleRate
-        let outFrames = max(1, Int(Double(inCount) * outRate / inRate))
-        guard let buf = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: AVAudioFrameCount(outFrames)),
+    /// Build a 24 kHz mono float buffer (aiFormat) from AI Int16 PCM; mixer upsamples.
+    nonisolated static func makeAIBuffer(_ data: Data) -> AVAudioPCMBuffer? {
+        let count = data.count / MemoryLayout<Int16>.size
+        guard count > 0,
+              let buf = AVAudioPCMBuffer(pcmFormat: aiFormat, frameCapacity: AVAudioFrameCount(count)),
               let ch = buf.floatChannelData else { return nil }
-        buf.frameLength = AVAudioFrameCount(outFrames)
-        let chans = Int(outFormat.channelCount)
-        for i in 0..<outFrames {
-            let pos = Double(i) * inRate / outRate
-            let a = min(inCount - 1, Int(pos)), b = min(inCount - 1, Int(pos) + 1)
-            let frac = Float(pos - Double(a))
-            let v = (Float(samples[a]) + (Float(samples[b]) - Float(samples[a])) * frac) / Float(Int16.max)
-            for c in 0..<chans { ch[c][i] = v }
-        }
+        let samples = data.withUnsafeBytes { raw in Array(raw.bindMemory(to: Int16.self)) }
+        buf.frameLength = AVAudioFrameCount(count)
+        for i in 0..<count { ch[0][i] = Float(samples[i]) / Float(Int16.max) }
         return buf
     }
 }
