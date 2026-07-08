@@ -42,7 +42,9 @@ final class RealtimeSession {
         closed = false
         state = .connecting
         let token = AuthStore.shared.bearer
-        guard !token.isEmpty, let url = URL(string: "\(API.agentWS)/realtime/relay") else { state = .degraded; return }
+        // fmt=pcmu 向 relay 声明本包上行是 G.711 μ-law @8kHz（EngineRecorder 的 tee）；
+        // relay 据此配置 OpenAI 输入格式。不带参数的旧包保持 24k PCM16 不受影响。
+        guard !token.isEmpty, let url = URL(string: "\(API.agentWS)/realtime/relay?fmt=pcmu") else { state = .degraded; return }
         var req = URLRequest(url: url)
         req.setBearer(token)                                  // handshake header, same as StatusSession
         let s = URLSession(configuration: .default)
