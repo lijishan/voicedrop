@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- 面额/开关存 R2 `config/referral.json`：`{enabled:true, authorCoins:12, newUserCoins:6, dailyCapPerOwner:10, requireDeviceCheck:true}`（零部署可调）。
+- 面额/开关存 R2 `config/referral.json`：`{enabled:true, authorCoins:12, newUserCoins:6, dailyCapPerOwner:30, requireDeviceCheck:true}`（零部署可调）。
 - 铸币公式与投币完全同池：`payout_uy = coins_uc × POOL_7D_UY ÷ (SEED_COINS_UC + 近7天全表铸币 + 本次)`；共享 `FUSE_MULT` 当日保险丝。
 - 账本 reason：`referral_author`（邀请奖励）/ `referral_new`（受邀赠送）；过期 `CAMPAIGN_EXPIRE_DAYS = 90` 天。
 - 判新：`account.created_at` 距 now < 24h（服务端时间，不信客户端）。
@@ -48,7 +48,7 @@ describe("referral constants", () => {
   it("has defaults", () => {
     expect(REFERRAL_DEFAULTS).toEqual({
       enabled: true, authorCoins: 12, newUserCoins: 6,
-      dailyCapPerOwner: 10, requireDeviceCheck: true,
+      dailyCapPerOwner: 30, requireDeviceCheck: true,
     });
   });
 });
@@ -72,7 +72,7 @@ export const REFERRAL_DEFAULTS = {
   enabled: true,
   authorCoins: 12,        // 作者（分享 owner）得币
   newUserCoins: 6,        // 新装用户得币
-  dailyCapPerOwner: 10,   // owner 每日被奖励安装数上限（超出只发新人侧）
+  dailyCapPerOwner: 30,   // owner 每日被奖励安装数上限（超出只发新人侧）
   requireDeviceCheck: true,
 };
 ```
@@ -353,7 +353,7 @@ export async function deviceCheckMark(env, dcToken, fetcher) {
 5. **自邀拒绝**：owner 自己 claim 自己的 token → `reason:"self"`。
 6. **hello 走 IP**：先 `writeRefhit(env, ip, SECRET, OWNER, tok, NOW-3600_000)`，request 带 `CF-Connecting-IP` 头 → attributed；同 IP 两个 owner → `reason:"no-match"`。
 7. **DeviceCheck**：`requireDeviceCheck:true`（默认）时 fetcher 返回 bit0=true → `reason:"device-used"` 且不付钱；R2 放 `config/referral.json` `{requireDeviceCheck:false}` 时无 dcToken 也能领。
-8. **日封顶**：owner 当日已有 10 行 kind='referral' 的 mint（用 insertMint 手插，benef=OWNER, ts=当日）→ 新 claim 仍 attributed、新人得钱、**owner 得 0**（balance 不变，无 referral_author ledger 行）。
+8. **日封顶**：owner 当日已有 30 行 kind='referral' 的 mint（用 insertMint 手插，benef=OWNER, ts=当日）→ 新 claim 仍 attributed、新人得钱、**owner 得 0**（balance 不变，无 referral_author ledger 行）。
 9. **保险丝**：当日已发放 > FUSE_MULT×DAILY_POOL_UY（insertMint 大额）→ `reason:"pool_exhausted"`。
 10. **community token 也解析**：token 为社区 shareId（community/<id>.json）→ attributed 给 post.owner。
 11. **disabled**：R2 `config/referral.json` `{enabled:false}` → `reason:"disabled"`。
