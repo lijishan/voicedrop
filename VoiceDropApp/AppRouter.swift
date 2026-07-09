@@ -1,7 +1,9 @@
 import SwiftUI
+import SafariServices
 
-/// Deep-link targets for the `voicedrop://` URL scheme. One address per main
-/// page. The Share Extension and any external link open these; `AppRouter`
+/// Deep-link targets for the `voicedrop://` URL scheme AND universal links
+/// (https://voicedrop.cn/…). One address per main page. The Share Extension and
+/// any external link open these; `AppRouter`
 /// parses the URL and `LibraryView` applies it (switching tab AND clearing any
 /// pushed detail/settings so the link always lands cleanly — the earlier
 /// "just set the tab" approach left you on whatever detail page was open).
@@ -13,12 +15,22 @@ import SwiftUI
 ///   voicedrop://record            开始录音（全屏）
 ///   voicedrop://record?tag=创业   开始录音，挖出的文章缺省带该标签
 ///   voicedrop://article/<stem>    某篇文章详情（stem 形如 VoiceDrop-2026-07-01-…）
+///
+/// Universal links (entitlement applinks: voicedrop.cn / www / jianshuo.dev):
+///   https://voicedrop.cn/                     → 我的录音（落地页 = App 主页）
+///   https://voicedrop.cn/<分享id>             → .shareLink：问服务端这个 id 指向谁
+///     （GET /files/api/link/<id>）——自己的文章开原生详情页，别人的分享/社区帖
+///     开站内 Safari（页面本身就是完整阅读体验）
+///   https://jianshuo.dev/voicedrop/<token>    → 同上（老分享链接）
+///   其余路径（/help/ 等）                      → .web：站内 Safari 兜底，绝不死链
 enum DeepLink: Equatable {
     case recordings
     case community
     case settings
     case record(tag: String?)
     case article(String)
+    case shareLink(id: String, fallback: URL)
+    case web(URL)
 }
 
 @MainActor
@@ -33,6 +45,11 @@ final class AppRouter: ObservableObject {
     @Published var pending: DeepLink?
 
     func handle(_ url: URL) {
+        let scheme = url.scheme?.lowercased()
+        if scheme == "https" || scheme == "http" {
+            if let link = Self.universalLink(url) { pending = link }
+            return
+        }
         guard url.scheme?.lowercased() == "voicedrop" else { return }
         switch (url.host ?? "").lowercased() {
         case "", "recordings", "home": pending = .recordings
@@ -49,4 +66,40 @@ final class AppRouter: ObservableObject {
         default:                       pending = .recordings
         }
     }
+
+    /// Map a universal link to a deep link. Unknown host → nil (not ours, ignore);
+    /// known host but unroutable path → .web (in-app Safari), so a link that
+    /// already opened the app never dead-ends. A single root segment that looks
+    /// like a share id (voicedrop.cn/<id>, 也含社区帖 12 位 id) becomes .shareLink —
+    /// resolution (own article vs someone else's) happens in LibraryView, which
+    /// has the store + network; a false positive (e.g. /welcome) just resolves
+    /// to 404 and falls back to the web page, mirroring the server's own
+    /// static-fallthrough behavior in functions/[token].js.
+    static func universalLink(_ url: URL) -> DeepLink? {
+        guard let host = url.host?.lowercased() else { return nil }
+        var segs = url.pathComponents.filter { $0 != "/" }
+        switch host {
+        case "voicedrop.cn", "www.voicedrop.cn":
+            break
+        case "jianshuo.dev", "www.jianshuo.dev":
+            guard segs.first == "voicedrop" else { return nil }
+            segs.removeFirst()
+        default:
+            return nil
+        }
+        guard let first = segs.first else { return .recordings }   // 落地页 = App 主页
+        if segs.count == 1, first.range(of: "^[A-Za-z0-9_-]{6,16}$", options: .regularExpression) != nil {
+            return .shareLink(id: first, fallback: url)
+        }
+        return .web(url)
+    }
+}
+
+/// In-app Safari for universal links the app can't render natively (someone
+/// else's share, /help/, …) — the link still opens inside VoiceDrop instead of
+/// bouncing back out to Safari.app.
+struct SafariView: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
+    func updateUIViewController(_ vc: SFSafariViewController, context: Context) {}
 }

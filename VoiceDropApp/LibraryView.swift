@@ -29,6 +29,12 @@ struct LibraryView: View {
     @State private var showSettings = false
     @State private var selectedRec: Recording?
     @State private var selectedPost: CommunityPost?
+    // Universal-link web fallback (someone else's share, /help/, …) — in-app Safari.
+    @State private var webSheet: WebSheetItem?
+    private struct WebSheetItem: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
     @State private var confirmUnshare: CommunityPost?
 
     // 语音指令 walkie-talkie: the red record button itself doubles as a
@@ -207,6 +213,9 @@ struct LibraryView: View {
         .sheet(item: $linkResponder.pending) { p in
             DeviceLinkApprovalSheet(responder: linkResponder, pending: p)
         }
+        .sheet(item: $webSheet) { item in
+            SafariView(url: item.url).ignoresSafeArea()
+        }
         .onChange(of: scenePhase) { _, p in
             if p == .active { statusSession.connect(); Task { await refresh() } }
             else if p == .background { statusSession.disconnect() }
@@ -248,9 +257,33 @@ struct LibraryView: View {
                 } else {
                     Task { await refresh(); selectedRec = store.recordings.first { $0.stem == stem } }
                 }
+            case .shareLink(let id, let fallback):
+                // https://voicedrop.cn/<id> — ask the server what it points at;
+                // my own article opens natively, anything else opens the public
+                // page in-app. Resolution is async; the .article it may enqueue
+                // re-enters this handler (and its recording guard) normally.
+                Task { await openShareLink(id, fallback: fallback) }
+            case .web(let u):
+                webSheet = WebSheetItem(url: u)
             }
             Task { @MainActor in router.pending = nil }
         }
+    }
+
+    /// Resolve a universal-link share id (voicedrop.cn/<id>) via the public
+    /// GET /files/api/link/<id>: my OWN article → native detail view; anything
+    /// else (community post, someone else's share, unknown/expired id) → the
+    /// public web page in in-app Safari. Never dead-ends.
+    private func openShareLink(_ id: String, fallback: URL) async {
+        struct Resolved: Decodable { let type: String; let owner: String; let stem: String }
+        if let (data, resp) = try? await URLSession.shared.data(from: API.filesBase.appending(path: "link/\(id)")),
+           resp.isOK,
+           let r = try? JSONDecoder().decode(Resolved.self, from: data),
+           let scope = await store.ownerScope(), r.owner == scope {
+            router.pending = .article(r.stem)
+            return
+        }
+        webSheet = WebSheetItem(url: fallback)
     }
 
     private func checkPendingReplies(_ recs: [Recording]) {

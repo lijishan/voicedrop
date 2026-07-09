@@ -45,6 +45,12 @@ targets:
         # APNs（文章挖好了推送 + 运维报警）。文件里写 development；App Store 导出
         # re-sign 时按分发描述文件自动换成 production，无需双文件。
         aps-environment: development
+        # Universal links：voicedrop.cn / 老分享域 jianshuo.dev 的链接直接拉起 App
+        #（AASA 文件在 jianshuo.dev Pages 项目的 .well-known/ 与 voicedrop/.well-known/）。
+        com.apple.developer.associated-domains:
+          - applinks:voicedrop.cn
+          - applinks:www.voicedrop.cn
+          - applinks:jianshuo.dev
         com.apple.developer.applesignin:
           - Default
         com.apple.developer.icloud-container-identifiers:

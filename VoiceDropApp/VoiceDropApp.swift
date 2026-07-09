@@ -10,7 +10,12 @@ struct VoiceDropApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(router)
-                .onOpenURL { router.handle($0) }   // voicedrop://<page> — see AppRouter/DeepLink
+                .onOpenURL { router.handle($0) }   // voicedrop://<page> + universal links — see AppRouter/DeepLink
+                // Universal links (https://voicedrop.cn/…) arrive as an NSUserActivity;
+                // some iOS versions deliver ONLY here, not via onOpenURL. Same handler.
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                    if let url = activity.webpageURL { router.handle(url) }
+                }
         }
     }
 }

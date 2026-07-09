@@ -8,6 +8,12 @@
 	<array>
 		<string>Default</string>
 	</array>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:voicedrop.cn</string>
+		<string>applinks:www.voicedrop.cn</string>
+		<string>applinks:jianshuo.dev</string>
+	</array>
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
 		<string>iCloud.com.wangjianshuo.VoiceDrop</string>

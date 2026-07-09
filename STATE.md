@@ -1,8 +1,18 @@
 # VoiceDrop — project state (read this first)
 
-Last updated: 2026-07-08
+Last updated: 2026-07-09
 
-## 最近大改：录音后端统一 AVAudioEngine + AI 采访变录音内开关（2026-07-08）
+## 最近大改：Universal Links——voicedrop.cn 链接直接拉起 App（2026-07-09）
+
+- **服务端（jianshuo.dev repo，已部署）**：AASA 文件两份——`voicedrop/.well-known/apple-app-site-association`（voicedrop.cn 经腾讯云 Caddy「补前缀」映射取到）+ 根 `.well-known/…`（jianshuo.dev 老分享链接，components 只声明 `/voicedrop/*`）；`_headers` 强制 `application/json`（Pages 对无扩展名文件默认 octet-stream）。策略 = voicedrop.cn 整站进 App，仅排除 `/files/*` 与 `/privacy/*`。已实测 voicedrop.cn / www / jianshuo.dev 三处 200 无跳转 + Apple CDN（`app-site-association.cdn-apple.com/a/v1/voicedrop.cn`）200。
+- **新公开 API `GET /files/api/link/<id>`** → `{type:"article"|"community",owner,stem}`——app 判断分享 id 是否指向自己的文章；shares/ 未命中回落 community/ 指针；被举报帖 404（对齐公开页）。分享指向非 articles 键一律 404。测试 `agent/test/link-resolve.test.js`。
+- **分享页 Smart App Banner**（`functions/voicedrop/[token].js` metaTags）：`apple-itunes-app` app-id=6781565141、app-argument=分享 url。微信内点链接**不会**拉起 App（微信限制）；「在 Safari 中打开」后靠这条横幅一键进 App——同域页内点击不触发 universal link，横幅是唯一可靠的 web→app 跳板。
+- **iOS**：⚠️ **entitlements 真源在 `project.yml` 的 `entitlements.properties`——`xcodegen generate` 每次整个重写 `.entitlements` 文件，直接改文件会被无声冲掉**（本次实施时踩到）。已加 `applinks:voicedrop.cn/www.voicedrop.cn/jianshuo.dev`。`AppRouter` 认 https URL（`universalLink(_:)` 静态解析，DeepLink 新 case `shareLink(id:fallback:)`/`web(URL)`）；`LibraryView.openShareLink` 调 link API——owner==whoami scope 开原生文章详情，其余（社区帖/别人的分享/help 等）`SafariView`（SFSafariViewController）站内打开，绝不死链；「录音进行中丢弃深链」守卫天然覆盖新 case。`VoiceDropApp` 补 `.onContinueUserActivity(NSUserActivityTypeBrowsingWeb)`（部分 iOS 只走 activity 不走 onOpenURL）。
+- **签名**：App ID 已开 Associated Domains capability（`fastlane produce enable_services --associated-domains`，本地 ASC env 直接可用）；`fastlane refresh_profiles` 已重发 profile 到 certs repo（beta lane 的 `readonly:false` 仍留着，CI 下次构建自取）。
+- **已知遗留**：① `~/code/jianshuo.dev/infra/voicedrop-cn/Caddyfile` 在 repo 里是 **0 字节空文件**（README 的「10 分钟重建」不成立）——线上真配置在 `/etc/caddy/Caddyfile`，需要 ssh `ubuntu@49.235.147.96` 的人回填（本次会话权限拦了远程读取）；② 微信内直接拉起 App 未做（需微信开放平台 `wx-open-launch-app` 开放标签 + 服务号 JS 签名，另立项）；③ 分享链接的 `?s=<index>` 段选择在原生详情页暂未跳到对应篇（打开整组）。
+- 计划全文：`docs/superpowers/plans/2026-07-09-universal-links.md`。
+
+## 上一个大改：录音后端统一 AVAudioEngine + AI 采访变录音内开关（2026-07-08）
 
 录音与 AI 采访解耦：**所有录音默认走 `EngineRecorder`（AVAudioEngine）**，AI 采访员是录音过程中随时可开关的旁路——录音界面停止键左侧新增「采访」键（与右侧拍照对称），点一下连 relay、再点结束，每段独立计费（worker 在 WS close 结算）。列表里原来的隐藏采访入口已删除。
 
@@ -20,7 +30,7 @@ Last updated: 2026-07-08
 - **已知遗留**：RecordSession 里 classic/engine 仍是 if/else 分支（RecordingBackend 协议未完全启用——刻意不在稳定期重构）；真机需验证：录音中插拔 AirPods 前后段都在、采访中拔耳机不崩、AI 说话中关/开采访无卡麦。
 - **服务端**：relay 在 voicedrop-agent worker `/agent/realtime/relay`（WS 中转 OpenAI gpt-realtime-2.1，key 不落设备，`response.done.usage` 计费）；采访员提示词在 `agent/src/realtime.js`（名字叫 VoiceDrop，默认沉默、卡住才插话）。
 
-## 上一个大改：追问（follow-up questions，2026-07-07 上线）
+## 更早的大改：追问（follow-up questions，2026-07-07 上线）
 
 成文后 AI 按篇追问 1–3 个「只有作者知道」的细节，作者按住说话回答，回答被织进正文。
 
