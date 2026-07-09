@@ -1,1 +1,6 @@
-Initial release. Recordings are auto-transcribed to subtitles and turned into articles you can listen to and read right in the app.
+What's new:
+• AI interview: turn it on mid-recording and it asks follow-up questions to draw your ideas out
+• Push notifications: get pinged the moment an article is ready, tap to open it
+• Hold-to-speak editing is far more reliable, with clear error messages
+• Community share links open smoothly inside WeChat
+• Faster cold start and dozens of recording stability fixes
