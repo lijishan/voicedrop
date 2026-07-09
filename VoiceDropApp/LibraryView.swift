@@ -29,11 +29,20 @@ struct LibraryView: View {
     @State private var showSettings = false
     @State private var selectedRec: Recording?
     @State private var selectedPost: CommunityPost?
-    // Universal-link web fallback (someone else's share, /help/, …) — in-app Safari.
+    // Universal-link web fallback (/help/ 等无原生对应的页面) — in-app Safari.
     @State private var webSheet: WebSheetItem?
     private struct WebSheetItem: Identifiable {
         let id = UUID()
         let url: URL
+    }
+    // Universal link 指向别人的分享（非社区帖）→ 只读阅读页（SharedArticleView）。
+    @State private var sharedArticle: SharedArticleNav?
+    private struct SharedArticleNav: Identifiable, Hashable {
+        let id = UUID()
+        let shared: SharedArticle
+        let index: Int
+        static func == (l: Self, r: Self) -> Bool { l.id == r.id }
+        func hash(into h: inout Hasher) { h.combine(id) }
     }
     @State private var confirmUnshare: CommunityPost?
 
@@ -177,6 +186,9 @@ struct LibraryView: View {
         .navigationDestination(item: $selectedPost) { post in
             CommunityPostView(store: community, post: post, onRecordFinished: responseRecorded)
         }
+        .navigationDestination(item: $sharedArticle) { nav in
+            SharedArticleView(store: community, shared: nav.shared, articleIndex: nav.index)
+        }
         .navigationDestination(isPresented: $showSettings) { SettingsView(libraryStore: store) }
         .fullScreenCover(item: $recordLaunch) { launch in
             RecordSession(defaultTag: launch.tag ?? currentPageTag) {
@@ -239,19 +251,19 @@ struct LibraryView: View {
             }
             switch link {
             case .recordings:
-                tab = .recordings; selectedRec = nil; selectedPost = nil; showSettings = false
+                tab = .recordings; selectedRec = nil; selectedPost = nil; showSettings = false; sharedArticle = nil
                 Task { await refresh() }
             case .community:
-                tab = .community; selectedRec = nil; selectedPost = nil; showSettings = false
+                tab = .community; selectedRec = nil; selectedPost = nil; showSettings = false; sharedArticle = nil
             case .settings:
-                selectedRec = nil; selectedPost = nil; showSettings = true
+                selectedRec = nil; selectedPost = nil; showSettings = true; sharedArticle = nil
             case .record(let tag):
                 // A deep-link/intent tag beats the current page's tag; nil keeps
                 // page behavior (record on a tag page → that page's tag).
-                selectedRec = nil; selectedPost = nil; showSettings = false
+                selectedRec = nil; selectedPost = nil; showSettings = false; sharedArticle = nil
                 recordLaunch = RecordLaunch(tag: tag)
             case .article(let stem):
-                tab = .recordings; selectedPost = nil; showSettings = false
+                tab = .recordings; selectedPost = nil; showSettings = false; sharedArticle = nil
                 if let rec = store.recordings.first(where: { $0.stem == stem }) {
                     selectedRec = rec
                 } else {
@@ -271,16 +283,30 @@ struct LibraryView: View {
     }
 
     /// Resolve a universal-link share id (voicedrop.cn/<id>) via the public
-    /// GET /files/api/link/<id>: my OWN article → native detail view; anything
-    /// else (community post, someone else's share, unknown/expired id) → the
-    /// public web page in in-app Safari. Never dead-ends.
+    /// GET /files/api/link/<id> — 全部原生落地：
+    ///   我自己的文章   → 原生详情页（RecordingDetailView，复用 .article 路由）
+    ///   社区帖         → 原生帖子页（CommunityPostView 自己按 shareId 拉全文/回复/投币态）
+    ///   别人的普通分享 → 只读阅读页（SharedArticleView，正文就在 link 响应里）
+    ///   解析失败/过期  → 站内 Safari 兜底，绝不死链。
     private func openShareLink(_ id: String, fallback: URL) async {
-        struct Resolved: Decodable { let type: String; let owner: String; let stem: String }
         if let (data, resp) = try? await URLSession.shared.data(from: API.filesBase.appending(path: "link/\(id)")),
            resp.isOK,
-           let r = try? JSONDecoder().decode(Resolved.self, from: data),
-           let scope = await store.ownerScope(), r.owner == scope {
-            router.pending = .article(r.stem)
+           let shared = try? JSONDecoder().decode(SharedArticle.self, from: data) {
+            if let scope = await store.ownerScope(), shared.owner == scope {
+                router.pending = .article(shared.stem)
+            } else if shared.type == "community" {
+                tab = .community; selectedRec = nil; showSettings = false; sharedArticle = nil
+                selectedPost = CommunityPost(shareId: id, author: nil, title: nil,
+                                             firstSharedAt: nil, updatedAt: nil,
+                                             count: nil, mine: nil, replyTo: nil)
+            } else {
+                // ?s=<i> = 分享者当时选中的那篇；越界回落第 0 篇。
+                let s = URLComponents(url: fallback, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "s" })?.value.flatMap(Int.init) ?? 0
+                let count = shared.articles?.count ?? 0
+                selectedRec = nil; selectedPost = nil; showSettings = false
+                sharedArticle = SharedArticleNav(shared: shared, index: (0..<max(count, 1)).contains(s) ? s : 0)
+            }
             return
         }
         webSheet = WebSheetItem(url: fallback)

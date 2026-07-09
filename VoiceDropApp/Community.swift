@@ -888,3 +888,101 @@ struct CommunityPhotoTile: View {
             }
     }
 }
+
+// MARK: - 别人的分享：只读阅读页（universal link 原生落地）
+
+/// GET /files/api/link/<id> 的响应——分享短链解析 + 正文。App 用 owner 判断
+/// 是不是自己的文章；不是自己的、也不是社区帖时，正文就地喂给 SharedArticleView。
+struct SharedArticle: Decodable {
+    let type: String            // "article" | "community"
+    let owner: String           // "users/<sub>/"（拼照片 full key 用）
+    let stem: String
+    let title: String?
+    let articles: [MinedArticle]?
+    let photos: [String]?       // legacy [[photo:N]] 解析用；新文章无此字段
+}
+
+/// 别人分享的文章（非社区帖）的只读阅读页——voicedrop.cn/<id> universal link
+/// 指向他人文章时的原生落地。与 CommunityPostView 同一套阅读排版（标题/章节
+/// chips/正文段落/内嵌照片），但没有任何社区动作（投币/回应/举报都不适用）。
+struct SharedArticleView: View {
+    let store: CommunityStore      // 只用它取照片（公共 photo 端点）
+    let shared: SharedArticle
+    @State var articleIndex: Int   // 初值 = 分享链接的 ?s=<i>（分享者当时选中的那篇）
+
+    @Environment(\.dismiss) private var dismiss
+    private var articles: [MinedArticle] { shared.articles ?? [] }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                NavSquare(systemName: "chevron.left", stroke: Theme.inkRead, border: Theme.borderRead) { dismiss() }
+                    .accessibilityLabel("返回")
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            if articles.isEmpty {
+                Spacer()
+                Text("这篇分享已不可用").foregroundStyle(Theme.secondary).font(.system(size: 15))
+                Spacer()
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let a = articles[safe: articleIndex] {
+                            Text(a.title)
+                                .font(.system(size: 23, weight: .semibold)).foregroundStyle(Theme.inkRead)
+                                .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
+                                .padding(.top, 10)
+                            if articles.count > 1 { chipRow.padding(.top, 16) }
+                            articleBody(a).padding(.top, articles.count > 1 ? 16 : 20)
+                        }
+                        Color.clear.frame(height: 24)
+                    }
+                    .padding(.horizontal, 20)
+                }
+            }
+        }
+        .background(Theme.readBG.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    @ViewBuilder private func articleBody(_ a: MinedArticle) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ForEach(ArticleBody.segments(a.body)) { seg in
+                switch seg {
+                case .text(let t):
+                    Text((try? AttributedString(markdown: t, options: .init(
+                        interpretedSyntax: .inlineOnlyPreservingWhitespace,
+                        failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(t))
+                        .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
+                        .lineSpacing(9).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .photo(let token):
+                    if let relKey = ArticleBody.resolvePhotoKey(token, photos: shared.photos ?? []) {
+                        CommunityPhotoTile(store: store, fullKey: shared.owner + relKey)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var chipRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(articles.enumerated()), id: \.offset) { i, a in
+                    Button { articleIndex = i } label: {
+                        Text(a.title).lineLimit(1)
+                            .font(.system(size: 13, weight: i == articleIndex ? .semibold : .regular))
+                            .padding(.horizontal, 14).padding(.vertical, 6)
+                            .background(i == articleIndex ? Theme.accentSoft : Theme.card,
+                                        in: RoundedRectangle(cornerRadius: Theme.R.chip))
+                            .overlay(RoundedRectangle(cornerRadius: Theme.R.chip)
+                                .stroke(i == articleIndex ? .clear : Theme.borderRead, lineWidth: 1))
+                            .foregroundStyle(i == articleIndex ? Theme.accent : Theme.metaRead)
+                    }
+                }
+            }
+        }
+    }
+}
