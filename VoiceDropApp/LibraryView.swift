@@ -264,10 +264,18 @@ struct LibraryView: View {
                 recordLaunch = RecordLaunch(tag: tag)
             case .article(let stem):
                 tab = .recordings; selectedPost = nil; showSettings = false; sharedArticle = nil
-                if let rec = store.recordings.first(where: { $0.stem == stem }) {
-                    selectedRec = rec
-                } else {
-                    Task { await refresh(); selectedRec = store.recordings.first { $0.stem == stem } }
+                // 先用本地快照立即打开(有的话),但必须再刷新一次换成新快照:「文章已生成」
+                // 推送到达时本地列表多半还停在挖矿前的状态(hasArticles=false),而详情页
+                // fetchDoc 会被这个旧 flag 挡住不问服务端,永远显示「还没成文」。刷新后
+                // Recording 值变了,navigationDestination 会重建详情页、重新拉 doc。
+                selectedRec = store.recordings.first { $0.stem == stem }
+                let opened = selectedRec
+                Task {
+                    await refresh()
+                    guard selectedRec == opened else { return }   // 刷新期间用户自己导航了,不打扰
+                    if let fresh = store.recordings.first(where: { $0.stem == stem }), fresh != opened {
+                        selectedRec = fresh
+                    }
                 }
             case .shareLink(let id, let fallback):
                 // https://voicedrop.cn/<id> — ask the server what it points at;
