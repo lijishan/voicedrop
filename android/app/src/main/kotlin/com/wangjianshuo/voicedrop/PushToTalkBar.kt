@@ -43,10 +43,11 @@ fun PushToTalkBar(
                     .background(VDTheme.Primary.copy(alpha = 0.15f), RoundedCornerShape(24.dp)),
                 contentAlignment = Alignment.Center,
             ) {
+                val isError = transcription.startsWith("连接中断") || transcription.startsWith("⚠")
                 Text(
                     transcription.ifBlank { "说话中..." },
                     style = VDTheme.Body,
-                    color = VDTheme.Primary,
+                    color = if (isError) VDTheme.Red else VDTheme.Primary,
                 )
             }
         } else {

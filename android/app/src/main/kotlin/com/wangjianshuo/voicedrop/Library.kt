@@ -6,6 +6,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 class LibraryStore(
     private val context: Context,
@@ -21,6 +23,25 @@ class LibraryStore(
     enum class Tab { RECORDINGS, COMMUNITY }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // Article metadata cache (disk-backed to prevent HTTP storm on cold start)
+    // stem → title. Persisted as JSON in SharedPreferences.
+    private val titleCache: MutableMap<String, String>
+    private val cachePrefs = context.getSharedPreferences("article_meta", Context.MODE_PRIVATE)
+    private val fetchSemaphore = Semaphore(5)
+    private val gson = com.google.gson.Gson()
+
+    init {
+        val json = cachePrefs.getString("titles", null)
+        titleCache = if (json != null) {
+            try { gson.fromJson(json, object : com.google.gson.reflect.TypeToken<Map<String, String>>() {}.type) ?: mutableMapOf() }
+            catch (_: Exception) { mutableMapOf() }
+        } else mutableMapOf()
+    }
+
+    private fun persistMetaCache() {
+        cachePrefs.edit().putString("titles", gson.toJson(titleCache)).apply()
+    }
 
     fun smartRefresh() {
         if (recordings.isEmpty()) refresh()
@@ -109,11 +130,14 @@ class LibraryStore(
             val stem = RecordingName.stem(shortName)
             val hasArticles = keys.any { it.endsWith("articles/$stem.json") }
             val isEmpty = keys.any { it.endsWith("articles/$stem.empty") }
-            var articleTitle: String? = null
-            if (hasArticles) {
+            var articleTitle: String? = titleCache[stem]
+            if (hasArticles && articleTitle == null) {
                 try {
-                    val doc: ArticleDoc = httpClient.get("${API.FILES_BASE}/download/articles/$stem.json")
-                    articleTitle = doc.articles.firstOrNull()?.title ?: doc.title
+                    fetchSemaphore.withPermit {
+                        val doc: ArticleDoc = httpClient.get("${API.FILES_BASE}/download/articles/$stem.json")
+                        articleTitle = doc.articles.firstOrNull()?.title ?: doc.title
+                        if (articleTitle != null) { titleCache[stem] = articleTitle!!; persistMetaCache() }
+                    }
                 } catch (e: Exception) { Log.w("Library", "ignored", e) }
             }
             Recording(
@@ -137,6 +161,7 @@ class LibraryStore(
             try { httpClient.delete<Unit>("${API.FILES_BASE}/file/articles/${RecordingName.stem(audioName)}.srt") } catch (e: Exception) { Log.w("Library", "ignored", e) }
             try { httpClient.delete<Unit>("${API.FILES_BASE}/file/articles/${RecordingName.stem(audioName)}.blocked") } catch (e: Exception) { Log.w("Library", "ignored", e) }
             recordings = recordings.filter { it.audioName != audioName }
+            titleCache.remove(RecordingName.stem(audioName)); persistMetaCache()
             context.filesDir.listFiles()?.find { it.name == audioName }?.delete()
         }
     }

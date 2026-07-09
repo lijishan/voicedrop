@@ -29,6 +29,7 @@ class VoiceEdit(
     private var onTranscript: ((String) -> Unit)? = null
     private var onFinalText: ((String) -> Unit)? = null
     private var lastTranscript = ""
+    private var lastError: String? = null
 
     private val SAMPLE_RATE = 16000
     private val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
@@ -43,6 +44,8 @@ class VoiceEdit(
         if (!hasPermission()) return
         this.onTranscript = onTranscript
         this.onFinalText = onFinalText
+        lastTranscript = ""
+        lastError = null
         seq = 0
         isRecording.set(true)
         connectAndStream()
@@ -76,8 +79,8 @@ class VoiceEdit(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 isRecording.set(false)
-                val finalText = "rec failed: ${t.message}"
-                onFinalText?.invoke(finalText)
+                lastError = "连接中断: ${t.message}"
+                onFinalText?.invoke(lastError ?: "")
             }
         }
         httpClient.webSocket(API.wsAsr(), listener)
@@ -123,7 +126,8 @@ class VoiceEdit(
                         }
                     }
                 }
-                val finalText = lastTranscript
+                val finalText = lastError ?: lastTranscript
+                lastError = null
                 onFinalText?.invoke(finalText)
                 audioRecord?.stop()
                 audioRecord?.release()

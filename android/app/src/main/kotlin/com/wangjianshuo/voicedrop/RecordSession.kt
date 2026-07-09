@@ -10,6 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.*
@@ -31,6 +32,9 @@ fun RecordSession(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as VoiceDropApp
     val library = app.library
+    val interviewer = remember { RealtimeInterviewer(app.auth, app.httpClient) }
+
+    DisposableEffect(Unit) { onDispose { interviewer.stop() } }
     val auth = app.auth
     val httpClient = app.httpClient
     val promoter = remember { RecordingPromoter(context) }
@@ -104,6 +108,17 @@ fun RecordSession(onDismiss: () -> Unit) {
 
                 Spacer(Modifier.height(48.dp))
 
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Interview toggle (left of stop)
+                    if (isRecording) {
+                        IconButton(onClick = { interviewer.toggleInterview() }, modifier = Modifier.size(44.dp)) {
+                            Icon(Icons.Default.Forum, "AI采访",
+                                tint = if (interviewer.interviewActive) VDTheme.Primary else VDTheme.TextHint,
+                                modifier = Modifier.size(24.dp))
+                        }
+                        Spacer(Modifier.width(16.dp))
+                    }
+
                 Button(
                     onClick = {
                     if (isRecording) {
@@ -145,6 +160,8 @@ fun RecordSession(onDismiss: () -> Unit) {
                         tint = VDTheme.White.copy(alpha = 0.4f), modifier = Modifier.size(44.dp),
                     )
                 }
+
+                } // Row
 
                 Spacer(Modifier.height(16.dp))
 
