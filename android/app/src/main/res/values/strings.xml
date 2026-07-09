@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Home -->
+    <string name="app_name">VoiceDrop</string>
+    <string name="tab_recordings">我的录音</string>
+    <string name="tab_community">VD社区</string>
+    <string name="no_recordings">还没有录音</string>
+    <string name="hint_start_recording">按下底部红键开始录音</string>
+    <string name="hint_refresh">按下底部红键开始录音，或点顶部↻刷新</string>
+    <string name="tap_to_record">轻点录音</string>
+
+    <!-- Recording status -->
+    <string name="status_no_credit">余额不足</string>
+    <string name="status_too_long">录音过长</string>
+    <string name="status_asr">听录音</string>
+    <string name="status_asr_long">听录音中</string>
+    <string name="status_mining">挖文章</string>
+    <string name="status_mining_long">挖文章中</string>
+    <string name="status_done">已成文</string>
+    <string name="status_empty">无语音</string>
+    <string name="status_uploading">正在上传</string>
+    <string name="status_pending">待处理</string>
+    <string name="status_uploading_desc">正在上传中，完成后会自动处理</string>
+    <string name="status_pending_desc">AI 正在为你的口述生成文章，稍后回来查看</string>
+    <string name="status_triggered_desc">已触发处理，稍后刷新列表查看结果</string>
+    <string name="status_empty_desc">这段录音未检测到有效语音</string>
+    <string name="status_empty_detail">这段录音未检测到有效语音内容</string>
+    <string name="status_mine_now">立即处理</string>
+    <string name="unknown_recording">未知录音</string>
+
+    <!-- Recording session -->
+    <string name="recording">录音中</string>
+    <string name="recording_hint">按住说话，松手停止</string>
+    <string name="tap_stop">点击停止</string>
+    <string name="cancel">取消</string>
+
+    <!-- Detail page -->
+    <string name="back">返回</string>
+    <string name="share">分享</string>
+    <string name="share_article">分享文章</string>
+    <string name="hold_to_edit">按住 说话</string>
+    <string name="release_send">松手 完成录音</string>
+    <string name="slide_cancel">松开取消</string>
+    <string name="hold_speak">按住 说话</string>
+    <string name="rec_failed">录音失败</string>
+
+    <!-- Delete -->
+    <string name="delete_recording">删除录音</string>
+    <string name="delete_confirm">将删除这条录音及关联文章？</string>
+    <string name="delete">删除</string>
+    <string name="confirm">确认</string>
+    <string name="confirm_delete_account">确认删除</string>
+    <string name="delete_account_msg">将永久删除你的所有数据，此操作不可撤销！</string>
+
+    <!-- Community -->
+    <string name="community_empty">社区还没有内容</string>
+    <string name="load_error">加载失败</string>
+    <string name="no_title">无标题</string>
+    <string name="like">赞</string>
+
+    <!-- Settings -->
+    <string name="settings">设置</string>
+    <string name="name">名字</string>
+    <string name="style">文风</string>
+    <string name="style_not_set">未设置</string>
+    <string name="edit_style">编辑文风</string>
+    <string name="edit_style_placeholder">描述你的写作风格...</string>
+    <string name="wechat_official">微信公众号</string>
+    <string name="account">账户</string>
+    <string name="suanli_balance">算力余额</string>
+    <string name="about">关于</string>
+    <string name="about_desc">让 AI 帮你把口述变成文章</string>
+    <string name="delete_account">删除账户</string>
+    <string name="save">保存</string>
+    <string name="saved">已保存</string>
+    <string name="suanli">算力</string>
+    <string name="suanli_remaining">余额</string>
+    <string name="suanli_detail">明细</string>
+    <string name="close">关闭</string>
+    <string name="id_prefix">ID</string>
+
+    <!-- Time -->
+    <string name="just_now">刚刚</string>
+    <string name="minutes_ago">%d 分钟前</string>
+    <string name="hours_ago">%d 小时前</string>
+    <string name="days_ago">%d 天前</string>
+    <string name="today">今天</string>
+    <string name="yesterday">昨天</string>
+    <string name="day_before_yesterday">前天</string>
+
+    <!-- Share -->
+    <string name="share_link">分享链接</string>
+    <string name="share_to_community">分享到 VD社区</string>
+    <string name="share_success">分享成功</string>
+
+    <!-- WeChat -->
+    <string name="wechat_publish">发布公众号</string>
+
+    <!-- Followup -->
+    <string name="followup_title">追问</string>
+    <string name="skip">跳过</string>
+    <string name="answer">回答</string>
+
+    <!-- Misc -->
+    <string name="mine_failed">触发失败: %s</string>
+</resources>
