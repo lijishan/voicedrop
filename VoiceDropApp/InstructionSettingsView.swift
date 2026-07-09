@@ -32,7 +32,7 @@ final class InstructionCustomStore {
     private var token: String { AuthStore.shared.bearer }
 
     func load() async {
-        guard !token.isEmpty else { error = "请先登录"; return }
+        guard !token.isEmpty else { error = String(localized: "请先登录"); return }
         loading = true; error = nil
         defer { loading = false }
         struct R: Decodable { let items: [InstructionItem] }
@@ -40,9 +40,9 @@ final class InstructionCustomStore {
         req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard resp.isOK else { error = "加载失败"; return }
+            guard resp.isOK else { error = String(localized: "加载失败"); return }
             items = try JSONDecoder().decode(R.self, from: data).items
-        } catch { self.error = "加载失败" }
+        } catch { self.error = String(localized: "加载失败") }
     }
 
     /// 单条全量状态：instruction / label 空串 = 恢复缺省；hidden = 从菜单隐藏。
@@ -102,7 +102,7 @@ struct InstructionSettingsView: View {
                                                 symbol: item.hidden ? "eye.slash" : (item.isCustomized ? "wand.and.stars" : "text.quote"),
                                                 tileFG: item.hidden ? Theme.faint : (item.isCustomized ? Theme.accent : Theme.secondary),
                                                 title: rowTitle(item),
-                                                subtitle: item.hidden ? "已从菜单隐藏" : String(item.effective.prefix(40))) {
+                                                subtitle: item.hidden ? String(localized: "已从菜单隐藏") : String(item.effective.prefix(40))) {
                                         HStack(spacing: 8) {
                                             if !item.hidden && item.isCustomized {
                                                 Text("已自定义").font(.system(size: 12.5)).foregroundStyle(Theme.accent)
@@ -162,7 +162,7 @@ struct InstructionEditView: View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
                 NavSquare(systemName: "chevron.left", size: 36) { dismiss() }
-                Text(item?.label ?? "指令").font(.system(size: 20, weight: .semibold))
+                Text(item?.label ?? String(localized: "指令")).font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Theme.ink).lineLimit(1)
                 Spacer()
                 Button {

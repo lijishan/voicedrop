@@ -190,11 +190,11 @@ final class Uploader {
 
     func upload(_ url: URL) async -> Bool {
         guard hasValidToken else {
-            lastError = "请先用 Apple 登录"
+            lastError = String(localized: "请先用 Apple 登录")
             return false
         }
         guard Self.isUploadable(url) else {
-            lastError = "录音文件损坏，已跳过上传"
+            lastError = String(localized: "录音文件损坏，已跳过上传")
             return false
         }
         // Tag sidecar rides in front of the audio (mining triggers on the audio).
@@ -241,15 +241,15 @@ final class Uploader {
                 // Auth / other 4xx is the server rejecting THIS request — a retry
                 // won't change the outcome, so stop immediately.
                 if code == 401 || code == 403 {
-                    lastError = "token 失效（HTTP \(code)）"
+                    lastError = String(localized: "token 失效（HTTP \(code)）")
                     return false
                 }
                 if (400..<500).contains(code) {
-                    lastError = "上传失败 HTTP \(code)"
+                    lastError = String(localized: "上传失败 HTTP \(code)")
                     return false
                 }
                 // 5xx, or 0 (no HTTP response) — transient; fall through to retry.
-                lastError = "上传失败 HTTP \(code)"
+                lastError = String(localized: "上传失败 HTTP \(code)")
             } catch {
                 // Network blip / timeout / task cancelled on app suspension.
                 lastError = error.localizedDescription

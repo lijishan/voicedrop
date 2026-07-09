@@ -33,9 +33,9 @@ struct UsageView: View {
                 heroCard
                 subscriptionCard
                 if !grantBuckets.isEmpty {
-                    section("算力来源") { SettingsCard { bucketRows } }
+                    section(String(localized: "算力来源")) { SettingsCard { bucketRows } }
                 }
-                section("明细") { SettingsCard { ledgerRows } }
+                section(String(localized: "明细")) { SettingsCard { ledgerRows } }
             }
             .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 40)
         }
@@ -60,7 +60,7 @@ struct UsageView: View {
                 Text("≈ \(Suanli.articles(balance)) 篇").font(.system(size: 14, weight: .semibold)).foregroundStyle(Color(hex: "E2B871"))
             }
             .padding(.top, 6)
-            Text(loaded ? "累计获赠 \(Int(granted.rounded())) · 已用 \(Int(spent.rounded()))" : "加载中…")
+            Text(loaded ? String(localized: "累计获赠 \(Int(granted.rounded())) · 已用 \(Int(spent.rounded()))") : String(localized: "加载中…"))
                 .font(.system(size: 12.5)).foregroundStyle(Color(hex: "C9BFAE")).padding(.top, 14)
         }
         .padding(.horizontal, 20).padding(.vertical, 22)
@@ -141,7 +141,7 @@ struct UsageView: View {
 
     @ViewBuilder private var ledgerRows: some View {
         if entries.isEmpty {
-            Text(loaded ? "暂无记录" : "加载中…")
+            Text(loaded ? String(localized: "暂无记录") : String(localized: "加载中…"))
                 .font(.system(size: 14)).foregroundStyle(Theme.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 16).padding(.horizontal, 15)
@@ -174,11 +174,11 @@ struct UsageView: View {
 
     private func label(_ e: Entry) -> String {
         switch e.reason {
-        case "signup": return "注册赠送"
-        case "asr": return "语音转写"
-        case "mine": return "挖文章"
-        case "edit": return "语音修改"
-        default: return e.reason.hasPrefix("campaign:") ? "活动赠送" : e.reason
+        case "signup": return String(localized: "注册赠送")
+        case "asr": return String(localized: "语音转写")
+        case "mine": return String(localized: "挖文章")
+        case "edit": return String(localized: "语音修改")
+        default: return e.reason.hasPrefix("campaign:") ? String(localized: "活动赠送") : e.reason
         }
     }
     private func fmt(_ s: Double) -> String { s < 10 ? String(format: "%.1f", s) : String(Int(s.rounded())) }

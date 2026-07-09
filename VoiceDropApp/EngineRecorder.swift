@@ -184,7 +184,7 @@ final class EngineRecorder: RecordingBackend {
         // take would let it silently disappear downstream (promote's move throws and
         // nothing surfaces). Return nil + engineError so the UI can show a real failure.
         guard FileManager.default.fileExists(atPath: url.path) else {
-            engineError = engineError ?? "录音文件未生成"
+            engineError = engineError ?? String(localized: "录音文件未生成")
             EngineRecorder.trace("stop: file missing (\(url.lastPathComponent)) — refusing to promote a ghost take")
             return nil
         }
@@ -204,7 +204,7 @@ final class EngineRecorder: RecordingBackend {
                 try playbackEngine.start()
                 player.play()
                 playbackStarted = true
-            } catch { engineError = "播放引擎启动失败: \(error.localizedDescription)"; return }
+            } catch { engineError = String(localized: "播放引擎启动失败: \(error.localizedDescription)"); return }
         }
         pendingPlayback += 1
         let gen = playbackGen
@@ -268,7 +268,7 @@ final class EngineRecorder: RecordingBackend {
             try captureEngine.start()
             EngineRecorder.trace("configChange: capture restarted OK (input \(input.inputFormat(forBus: 0).sampleRate) Hz)")
         } catch {
-            engineError = "路由切换后录音引擎重启失败: \(error.localizedDescription)"
+            engineError = String(localized: "路由切换后录音引擎重启失败: \(error.localizedDescription)")
             EngineRecorder.trace("configChange: restart FAILED \(error.localizedDescription)")
         }
         // Playback side stops on config change too; reset so the next AI chunk lazily
@@ -360,11 +360,11 @@ final class EngineRecorder: RecordingBackend {
                 fileConverter = AVAudioConverter(from: buffer.format, to: file.processingFormat)
             }
             guard let conv = fileConverter, let out = Sink.convert(buffer, with: conv) else {
-                reportOnce("音频格式转换失败（路由切换后）"); return
+                reportOnce(String(localized: "音频格式转换失败（路由切换后）")); return
             }
             guard out.frameLength > 0 else { return }               // converter priming
             do { try file.write(from: out) }
-            catch { reportOnce("写文件失败: \(error.localizedDescription)") }
+            catch { reportOnce(String(localized: "写文件失败: \(error.localizedDescription)")) }
         }
 
         /// Persistent-converter AI tee: G.711 μ-law bytes @ 8 kHz regardless of route.

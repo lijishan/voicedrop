@@ -42,7 +42,7 @@ enum CommunityTerms {
 
     static let supportEmail = "jianshuo@hotmail.com"
 
-    static let body = """
+    static let body = String(localized: """
     发布到 VD社区，表示你同意以下社区公约：
 
     • 你对自己发布的内容负责，并拥有发布它的权利。
@@ -51,7 +51,7 @@ enum CommunityTerms {
     • 你可以随时举报不当内容、屏蔽不想看到的用户。
 
     继续即表示你已阅读并同意本社区公约与最终用户许可协议（EULA）。如需联系或投诉内容，请发邮件至 \(supportEmail)。
-    """
+    """)
 }
 
 /// The agree-gate shown before a user's first community post.

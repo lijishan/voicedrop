@@ -36,9 +36,9 @@ struct AccountView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     identityCard
-                    group("数据") { dataCard }
-                    group("转移与同步") { transferCard }
-                    group("账户管理") { deleteCard }
+                    group(String(localized: "数据")) { dataCard }
+                    group(String(localized: "转移与同步")) { transferCard }
+                    group(String(localized: "账户管理")) { deleteCard }
                 }
                 .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 40)
             }
@@ -76,13 +76,13 @@ struct AccountView: View {
 
             Rectangle().fill(Theme.dividerInCard).frame(height: 1)
 
-            keyField(label: "你的 ID", value: auth.anonId, masked: false, copied: idCopied) {
+            keyField(label: String(localized: "你的 ID"), value: auth.anonId, masked: false, copied: idCopied) {
                 UIPasteboard.general.string = auth.anonId
                 idCopied = true
                 Task { try? await Task.sleep(nanoseconds: 1_800_000_000); idCopied = false }
             }
 
-            keyField(label: "访问令牌", value: maskedToken, masked: true, copied: tokenCopied) {
+            keyField(label: String(localized: "访问令牌"), value: maskedToken, masked: true, copied: tokenCopied) {
                 UIPasteboard.general.string = auth.bearer
                 tokenCopied = true
                 Task { try? await Task.sleep(nanoseconds: 1_800_000_000); tokenCopied = false }
@@ -148,7 +148,7 @@ struct AccountView: View {
                 Button(action: copy) {
                     HStack(spacing: 4) {
                         Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 13))
-                        if masked { Text(copied ? "已复制" : "复制").font(.system(size: 13, weight: .semibold)) }
+                        if masked { Text(copied ? String(localized: "已复制") : String(localized: "复制")).font(.system(size: 13, weight: .semibold)) }
                     }
                     .foregroundStyle(Theme.accent)
                 }
@@ -164,9 +164,9 @@ struct AccountView: View {
 
     private var dataCard: some View {
         SettingsCard {
-            dataRow("录音", "\(recordingCount) 条", trailingChevron: false)
+            dataRow(String(localized: "录音"), String(localized: "\(recordingCount) 条"), trailingChevron: false)
             settingsRowDivider
-            dataRow("成文", "\(minedCount) 篇", trailingChevron: false)
+            dataRow(String(localized: "成文"), String(localized: "\(minedCount) 篇"), trailingChevron: false)
         }
     }
 
@@ -247,7 +247,7 @@ struct AccountView: View {
         do {
             let (_, resp) = try await URLSession.shared.data(for: req)
             guard resp.isOK else {
-                deleteError = "服务器返回 \(resp.httpStatusCode)，请稍后再试。"
+                deleteError = String(localized: "服务器返回 \(resp.httpStatusCode)，请稍后再试。")
                 return
             }
         } catch {

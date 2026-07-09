@@ -54,7 +54,7 @@ struct ArticleDoc: Decodable {
 
     var resolvedArticles: [MinedArticle] {
         if let a = articles, !a.isEmpty { return a }
-        if let b = body, !b.isEmpty { return [MinedArticle(title: title ?? "(无题)", body: b)] }
+        if let b = body, !b.isEmpty { return [MinedArticle(title: title ?? String(localized: "(无题)"), body: b)] }
         return []
     }
 
@@ -187,14 +187,14 @@ enum ArticleBody {
 /// Which phase of mining a recording is in (pushed live by the Worker miner over
 /// the status WebSocket). Drives the in-flight badge label.
 enum MiningPhase: String { case asr, mining
-    var badge: String { self == .asr ? "听录音" : "挖文章" }
+    var badge: String { self == .asr ? String(localized: "听录音") : String(localized: "挖文章") }
 }
 
 /// Why the miner couldn't process a recording (the `.blocked` marker's reason). The
 /// ONE place the wire strings + their badge labels live (was split between the default
 /// in LibraryStore.fetchBlockReason and the label mapping in LibraryView).
 enum BlockReason: String { case noCredit = "no-credit", tooLong = "too-long"
-    var label: String { self == .tooLong ? "录音过长" : "余额不足" }
+    var label: String { self == .tooLong ? String(localized: "录音过长") : String(localized: "余额不足") }
 }
 
 /// A recording as seen in the user's R2 space: the audio key plus whether the
@@ -378,7 +378,7 @@ final class LibraryStore {
     }
 
     private func loadOnce() async {
-        guard !token.isEmpty else { error = "请先登录"; return }
+        guard !token.isEmpty else { error = String(localized: "请先登录"); return }
         loading = true; error = nil
         defer { loading = false }
         var req = URLRequest(url: base.appending(path: "list"))
@@ -386,7 +386,7 @@ final class LibraryStore {
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard resp.isOK else {
-                error = "加载失败"; return
+                error = String(localized: "加载失败"); return
             }
             let list = try JSONDecoder().decode(ListResponse.self, from: data)
             let names = Set(list.files.map(\.name))
@@ -523,7 +523,7 @@ final class LibraryStore {
         req.setBearer(token)
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard resp.isOK else {
-            throw NSError(domain: "library", code: 1, userInfo: [NSLocalizedDescriptionKey: "下载失败"])
+            throw NSError(domain: "library", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "下载失败")])
         }
         return data
     }
@@ -569,11 +569,11 @@ final class LibraryStore {
     /// the sidecars are best-effort.
     @discardableResult
     func delete(_ rec: Recording) async -> Bool {
-        guard !token.isEmpty else { error = "请先登录"; return false }
+        guard !token.isEmpty else { error = String(localized: "请先登录"); return false }
         let idx = recordings.firstIndex { $0.id == rec.id }
         recordings.removeAll { $0.id == rec.id }   // disappear now
         guard await del(rec.audioName) else {
-            error = "删除失败"
+            error = String(localized: "删除失败")
             if let idx, !recordings.contains(where: { $0.id == rec.id }) {
                 recordings.insert(rec, at: min(idx, recordings.count))   // rollback
             }
@@ -591,7 +591,7 @@ final class LibraryStore {
     /// to 待处理 → 听录音 → 挖文章 → 已成文 with fresh content. Reloads to reflect state.
     @discardableResult
     func deleteArticle(_ rec: Recording) async -> Bool {
-        guard !token.isEmpty else { error = "请先登录"; return false }
+        guard !token.isEmpty else { error = String(localized: "请先登录"); return false }
         _ = await del(rec.articleKey)
         _ = await del(rec.srtKey)
         _ = await del(rec.emptyKey)
@@ -685,13 +685,13 @@ final class LibraryStore {
     /// Map a WeChat errcode/errmsg to a friendly Chinese line. nil → use a generic toast.
     static func wechatMessage(_ errcode: Int?, _ errmsg: String?) -> String? {
         switch errcode {
-        case 45004?:                     return "摘要太短，正文写长一点再发"
-        case 40007?:                     return "草稿已失效，已重建一份"
-        case 45009?, 45011?, 45110?:     return "今天发布次数到上限了，明天再试"
-        case 40164?, 40125?, 40013?:     return "公众号配置有误，检查 AppID/Secret 或 IP 白名单"
+        case 45004?:                     return String(localized: "摘要太短，正文写长一点再发")
+        case 40007?:                     return String(localized: "草稿已失效，已重建一份")
+        case 45009?, 45011?, 45110?:     return String(localized: "今天发布次数到上限了，明天再试")
+        case 40164?, 40125?, 40013?:     return String(localized: "公众号配置有误，检查 AppID/Secret 或 IP 白名单")
         default:
             if errcode == nil && errmsg == nil { return nil }
-            return errmsg.map { "发布失败：\($0)" } ?? "发布失败"
+            return errmsg.map { String(localized: "发布失败：\($0)") } ?? String(localized: "发布失败")
         }
     }
 
@@ -757,7 +757,7 @@ final class LibraryStore {
         req.timeoutInterval = 120   // opus 重挖可能要几十秒
         guard let (data, resp) = try? await URLSession.shared.data(for: req), resp.isOK,
               let r = try? JSONDecoder().decode(Resp.self, from: data), r.ok else {
-            error = "重写失败"
+            error = String(localized: "重写失败")
             return
         }
         titleCache[rec.articleKey] = nil   // 标题可能变

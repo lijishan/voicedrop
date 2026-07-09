@@ -76,7 +76,7 @@ final class CommunityStore {
         req.setBearer(token)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard resp.isOK else { error = "加载失败"; return }
+            guard resp.isOK else { error = String(localized: "加载失败"); return }
             struct R: Decodable { let posts: [CommunityPost] }
             posts = try JSONDecoder().decode(R.self, from: data).posts
                 .filter { !BlockStore.isBlocked($0.author) }   // local block list (Apple 1.2)
@@ -388,7 +388,7 @@ struct CommunityPostView: View {
                                 .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
                                 .padding(.top, 18)
                             HStack(spacing: 8) {
-                                Text(full?.author ?? "匿名").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accent)
+                                Text(full?.author ?? String(localized: "匿名")).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accent)
                                 Text(communityDate(full?.firstSharedAt)).font(.system(size: 13)).foregroundStyle(Theme.metaRead)
                             }
                             .padding(.top, 8)
@@ -425,7 +425,7 @@ struct CommunityPostView: View {
             Button("举报并下架", role: .destructive) {
                 // 举报立即让它从社区下架（待人工审核），并从本地列表移除。
                 Task { await store.report(post.shareId) }
-                showToast("已举报，内容已下架待审核")
+                showToast(String(localized: "已举报，内容已下架待审核"))
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { dismiss() }
             }
             Button("取消", role: .cancel) {}
@@ -436,12 +436,12 @@ struct CommunityPostView: View {
             Button("屏蔽", role: .destructive) {
                 BlockStore.block(full?.author ?? post.author)
                 store.posts.removeAll { ($0.author ?? "") == (full?.author ?? post.author ?? "") }
-                showToast("已屏蔽，TA 的内容将不再显示")
+                showToast(String(localized: "已屏蔽，TA 的内容将不再显示"))
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { dismiss() }
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("屏蔽后，你将不再看到 \(full?.author ?? post.author ?? "该用户") 的任何社区内容。可在「设置」里取消屏蔽。")
+            Text("屏蔽后，你将不再看到 \(full?.author ?? post.author ?? String(localized: "该用户")) 的任何社区内容。可在「设置」里取消屏蔽。")
         }
         .task {
             liked = store.likedShareIds.contains(post.shareId)
@@ -480,7 +480,7 @@ struct CommunityPostView: View {
                     .foregroundStyle(liked ? Theme.accent : Theme.inkRead)
                     .frame(width: 38, height: 38)
             }
-            .accessibilityLabel(liked ? "取消赞" : "赞")
+            .accessibilityLabel(liked ? String(localized: "取消赞") : String(localized: "赞"))
             Menu {
                 Button { Task { await startResponse() } } label: {
                     Label("写回应", systemImage: "mic")
@@ -522,17 +522,17 @@ struct CommunityPostView: View {
                 let r = await store.feed(post.shareId)
                 feeding = false
                 if r?.ok == true, r?.already != true, let s = r?.suanli {
-                    showToast("已投币：你 +\(suanliText(s.feeder))，作者 +\(suanliText(s.author)) 算力")
+                    showToast(String(localized: "已投币：你 +\(suanliText(s.feeder))，作者 +\(suanliText(s.author)) 算力"))
                 } else if r?.already == true {
-                    showToast("已经投过这篇了")
+                    showToast(String(localized: "已经投过这篇了"))
                 } else if r?.error == "cannot_feed_own" {
-                    showToast("不能给自己的文章投币")
+                    showToast(String(localized: "不能给自己的文章投币"))
                 } else if r?.error == "pool_exhausted" {
-                    showToast("今日算力池已发完，明天再来")
+                    showToast(String(localized: "今日算力池已发完，明天再来"))
                 } else if r?.error == "needs_apple_signin" {
-                    showToast("投币需要先用 Apple 登录")
+                    showToast(String(localized: "投币需要先用 Apple 登录"))
                 } else {
-                    showToast("投币失败，稍后再试")
+                    showToast(String(localized: "投币失败，稍后再试"))
                 }
             }
         } label: {
@@ -543,7 +543,7 @@ struct CommunityPostView: View {
                 .opacity(feeding ? 0.4 : 1)
         }
         .disabled(fed || feeding)
-        .accessibilityLabel(fed ? "已投币" : "投币")
+        .accessibilityLabel(fed ? String(localized: "已投币") : String(localized: "投币"))
     }
 
     private func suanliText(_ v: Double) -> String {
@@ -617,7 +617,7 @@ struct CommunityPostView: View {
             HStack(spacing: 5) {
                 Image(systemName: "arrow.turn.up.left").font(.system(size: 11, weight: .medium))
                 Text("回应").font(.system(size: 12, weight: .medium))
-                Text((orig.articles?.first?.title ?? orig.title ?? orig.author) ?? "原文")
+                Text((orig.articles?.first?.title ?? orig.title ?? orig.author) ?? String(localized: "原文"))
                     .font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
                 Image(systemName: "chevron.right").font(.system(size: 10))
             }
@@ -658,7 +658,7 @@ struct CommunityPostView: View {
             RoundedRectangle(cornerRadius: 1.5).fill(Color(hex: "E8C7B8")).frame(width: 3)
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(reply.author ?? "匿名")
+                    Text(reply.author ?? String(localized: "匿名"))
                         .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
                     Text("回应 · \(communityDate(reply.firstSharedAt))")
                         .font(.system(size: 12)).foregroundStyle(Color(hex: "9A9387"))
@@ -767,13 +767,13 @@ struct CommunityPostView: View {
     private func startResponse() async {
         guard recorderPhase == .idle else { return }
         let granted = await AudioRecorder.ensurePermission()
-        guard granted else { showToast("请在设置里开启麦克风权限"); return }
+        guard granted else { showToast(String(localized: "请在设置里开启麦克风权限")); return }
         location.start()
         do {
             try recorder.start()
             withAnimation { recorderPhase = .recording }
         } catch {
-            showToast("无法开始录音")
+            showToast(String(localized: "无法开始录音"))
         }
     }
 
@@ -798,12 +798,12 @@ struct CommunityPostView: View {
     /// so it builds a rich link card — first photo + description — from the page og tags.
     /// X / 其它 get the full text + inline link. Same `ArticleShareItem` as 我的录音.
     private func sharePost() async {
-        let title = full?.articles?.first?.title ?? post.title ?? "VoiceDrop 分享"
-        let author = full?.author ?? post.author ?? "匿名"
+        let title = full?.articles?.first?.title ?? post.title ?? String(localized: "VoiceDrop 分享")
+        let author = full?.author ?? post.author ?? String(localized: "匿名")
         // Full text (every section, markers stripped) — matches the article-list share.
         let arts = full?.articles ?? []
         let allText = arts.isEmpty
-            ? "《\(title)》— \(author)\n来自 VoiceDrop 社区"
+            ? String(localized: "《\(title)》— \(author)\n来自 VoiceDrop 社区")
             : ArticleBody.shareText(arts)
         guard var comps = URLComponents(url: API.sharePage(post.shareId), resolvingAgainstBaseURL: false) else {
             sharePayload = SharePayload(text: allText); return

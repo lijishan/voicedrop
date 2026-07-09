@@ -231,7 +231,7 @@ struct StyleDatasetView: View {
     private func collectText(_ raw: String) async {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = firstLineTitle(text, fallback: "分享的文字")
-        let item = NewItem(iconKind: .text, typeLabel: "文字", title: "正在保存…", meta: formatChars(text.count), state: .parsing, chars: text.count)
+        let item = NewItem(iconKind: .text, typeLabel: String(localized: "文字"), title: String(localized: "正在保存…"), meta: formatChars(text.count), state: .parsing, chars: text.count)
         newItems.append(item)
         let id = item.id
         let attempt: () async -> Void = { await self.saveText(id: id, title: title, text: text) }
@@ -240,10 +240,10 @@ struct StyleDatasetView: View {
     }
 
     private func saveText(id: UUID, title: String, text: String) async {
-        mutate(id) { $0.state = .parsing; $0.title = "正在保存…" }
+        mutate(id) { $0.state = .parsing; $0.title = String(localized: "正在保存…") }
         let ok = await ShareAPI.collectStyle(type: "text", title: title, text: text, source: "分享文本")
         mutate(id) {
-            if ok { $0.state = .done; $0.title = title } else { $0.state = .failed; $0.title = "保存失败 · 可重试" }
+            if ok { $0.state = .done; $0.title = title } else { $0.state = .failed; $0.title = String(localized: "保存失败 · 可重试") }
         }
     }
 
@@ -260,11 +260,11 @@ struct StyleDatasetView: View {
         guard let text = extracted?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
             // Nothing to retry — the local extraction itself produced no text
             // (unsupported/corrupt file), a fresh attempt would fail the same way.
-            newItems.append(NewItem(iconKind: .doc, typeLabel: "文档", title: "无法读取内容", meta: filename, state: .failed, chars: 0, canRetry: false))
+            newItems.append(NewItem(iconKind: .doc, typeLabel: String(localized: "文档"), title: String(localized: "无法读取内容"), meta: filename, state: .failed, chars: 0, canRetry: false))
             return
         }
         let title = firstLineTitle(text, fallback: filename)
-        let item = NewItem(iconKind: .doc, typeLabel: "文档", title: "正在保存…", meta: formatChars(text.count), state: .parsing, chars: text.count)
+        let item = NewItem(iconKind: .doc, typeLabel: String(localized: "文档"), title: String(localized: "正在保存…"), meta: formatChars(text.count), state: .parsing, chars: text.count)
         newItems.append(item)
         let id = item.id
         let attempt: () async -> Void = { await self.saveDoc(id: id, title: title, text: text, source: filename) }
@@ -273,16 +273,16 @@ struct StyleDatasetView: View {
     }
 
     private func saveDoc(id: UUID, title: String, text: String, source: String) async {
-        mutate(id) { $0.state = .parsing; $0.title = "正在保存…" }
+        mutate(id) { $0.state = .parsing; $0.title = String(localized: "正在保存…") }
         let ok = await ShareAPI.collectStyle(type: "doc", title: title, text: text, source: source)
         mutate(id) {
-            if ok { $0.state = .done; $0.title = title } else { $0.state = .failed; $0.title = "保存失败 · 可重试" }
+            if ok { $0.state = .done; $0.title = title } else { $0.state = .failed; $0.title = String(localized: "保存失败 · 可重试") }
         }
     }
 
     private func collectWeb(_ url: URL) async {
         let host = url.host ?? url.absoluteString
-        let item = NewItem(iconKind: .web, typeLabel: "网页", title: "正在解析网页…", meta: host, state: .parsing, chars: 0)
+        let item = NewItem(iconKind: .web, typeLabel: String(localized: "网页"), title: String(localized: "正在解析网页…"), meta: host, state: .parsing, chars: 0)
         newItems.append(item)
         let id = item.id
         let attempt: () async -> Void = { await self.fetchAndSaveWeb(id: id, url: url) }
@@ -292,14 +292,14 @@ struct StyleDatasetView: View {
 
     private func fetchAndSaveWeb(id: UUID, url: URL) async {
         let host = url.host ?? url.absoluteString
-        mutate(id) { $0.state = .parsing; $0.title = "正在解析网页…"; $0.meta = host }
+        mutate(id) { $0.state = .parsing; $0.title = String(localized: "正在解析网页…"); $0.meta = host }
         // `Readability.fetch` collapses "no article body" into nil (see its own
         // doc comment); ShareAPI's `collectStyle` collapses any failure into
         // `false` with no reason either. Both funnel into the same 「解析失败 ·
         // 仅存链接」 failed state below — the user always gets a clear retry
         // path, never a false success.
         guard let fetched = await Readability.fetch(url) else {
-            mutate(id) { $0.state = .failed; $0.title = "解析失败 · 仅存链接"; $0.meta = truncatedLink(url) }
+            mutate(id) { $0.state = .failed; $0.title = String(localized: "解析失败 · 仅存链接"); $0.meta = truncatedLink(url) }
             return
         }
         let title = fetched.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? fetched.title! : host
@@ -307,7 +307,7 @@ struct StyleDatasetView: View {
         if ok {
             mutate(id) { $0.state = .done; $0.title = title; $0.meta = host; $0.chars = fetched.text.count }
         } else {
-            mutate(id) { $0.state = .failed; $0.title = "解析失败 · 仅存链接"; $0.meta = truncatedLink(url) }
+            mutate(id) { $0.state = .failed; $0.title = String(localized: "解析失败 · 仅存链接"); $0.meta = truncatedLink(url) }
         }
     }
 
@@ -544,23 +544,23 @@ private func formatChars(_ n: Int) -> String {
     f.numberStyle = .decimal
     f.locale = Locale(identifier: "en_US_POSIX")
     let s = f.string(from: NSNumber(value: n)) ?? "\(n)"
-    return "\(s) 字"
+    return String(localized: "\(s) 字")
 }
 
 private func formatTotalChars(_ n: Int) -> String {
     if n >= 10_000 {
-        return String(format: "约 %.1f 万字", Double(n) / 10_000)
+        return String(format: String(localized: "约 %.1f 万字"), Double(n) / 10_000)
     }
-    return "约 \(n) 字"
+    return String(localized: "约 \(n) 字")
 }
 
 private func chineseTypeLabel(_ type: String) -> String {
     switch type {
-    case "doc": return "文档"
-    case "web": return "网页"
-    case "text": return "文字"
-    case "image": return "图片"
-    case "audio": return "音频"
+    case "doc": return String(localized: "文档")
+    case "web": return String(localized: "网页")
+    case "text": return String(localized: "文字")
+    case "image": return String(localized: "图片")
+    case "audio": return String(localized: "音频")
     default: return type
     }
 }

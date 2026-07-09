@@ -21,7 +21,7 @@ final class ExportManager {
     func reset() { phase = .idle }
 
     func export(recordings: [Recording], store: LibraryStore) async {
-        guard !recordings.isEmpty else { phase = .failed("没有录音可以导出"); return }
+        guard !recordings.isEmpty else { phase = .failed(String(localized: "没有录音可以导出")); return }
         let total = recordings.count
 
         let tmpID = UUID().uuidString
@@ -33,7 +33,7 @@ final class ExportManager {
             try FileManager.default.createDirectory(at: audioDir,  withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: readDir,   withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: photosDir, withIntermediateDirectories: true)
-        } catch { phase = .failed("创建临时目录失败"); return }
+        } catch { phase = .failed(String(localized: "创建临时目录失败")); return }
 
         var docsMap: [(rec: Recording, doc: ArticleDoc?)] = []
 
@@ -95,7 +95,7 @@ final class ExportManager {
             try? FileManager.default.removeItem(at: srcDir)
             phase = .done(zipURL)
         } catch {
-            phase = .failed("打包失败：\(error.localizedDescription)")
+            phase = .failed(String(localized: "打包失败：\(error.localizedDescription)"))
         }
     }
 }

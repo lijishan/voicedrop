@@ -35,11 +35,11 @@ struct ExportSheet: View {
     @ViewBuilder private var contentView: some View {
         switch manager.phase {
         case .idle:
-            spinnerView("正在准备…")
+            spinnerView(String(localized: "正在准备…"))
         case .running(let done, let total, let current):
             runningView(done: done, total: total, current: current)
         case .zipping:
-            spinnerView("正在打包…")
+            spinnerView(String(localized: "正在打包…"))
         case .done(let url):
             doneView(url: url)
         case .failed(let msg):

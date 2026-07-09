@@ -197,7 +197,7 @@ final class Prefs {
         ]
     }
 
-    var qualityLabel: String { highQuality ? "高 · AAC" : "标准 · AAC" }
+    var qualityLabel: String { highQuality ? String(localized: "高 · AAC") : String(localized: "标准 · AAC") }
 
     /// "1.0 (42)" — marketing version + build number for the Settings 版本 row.
     static var versionBuild: String {

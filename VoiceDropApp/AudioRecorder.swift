@@ -24,7 +24,7 @@ final class AudioRecorder: RecordingBackend {
 
     enum RecorderError: LocalizedError {
         case couldNotStart
-        var errorDescription: String? { "无法开始录音" }
+        var errorDescription: String? { String(localized: "无法开始录音") }
     }
 
     private(set) var isRecording = false

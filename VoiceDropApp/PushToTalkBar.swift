@@ -143,7 +143,7 @@ struct PushToTalkBar: View {
     /// 指令已发出（enqueue 之后）的回调——追问用它当场翻题。
     var onDidSend: (() -> Void)? = nil
     /// 空闲态按钮文案（追问展开时换成「按住 说话 回答」）。
-    var idleLabel: String = "按住 说话 修改"
+    var idleLabel: String = String(localized: "按住 说话 修改")
 
     // 上滑取消的手势态，完全是这条 bar 自己的 UI 细节，不需要外部知道。
     @State private var willCancel = false
@@ -180,7 +180,7 @@ struct PushToTalkBar: View {
     private func pill(recording: Bool, working: Bool) -> some View {
         HStack(spacing: 8) {
             if recording {
-                Text(willCancel ? "上滑取消 · 松开放弃" : "松开 发送 · 上滑取消")
+                Text(willCancel ? String(localized: "上滑取消 · 松开放弃") : String(localized: "松开 发送 · 上滑取消"))
                     .font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.accent)
             } else if working {
                 Image(systemName: "pencil.line").font(.system(size: 16, weight: .semibold))

@@ -226,7 +226,7 @@ final class PhotoCaptureVC: UIViewController, PHPickerViewControllerDelegate {
         view.addSubview(leftPill)
 
         // — top-right 完成 —
-        doneButton.setTitle("完成", for: .normal)
+        doneButton.setTitle(String(localized: "完成"), for: .normal)
         doneButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
         doneButton.layer.cornerRadius = 8
         doneButton.translatesAutoresizingMaskIntoConstraints = false
@@ -249,7 +249,7 @@ final class PhotoCaptureVC: UIViewController, PHPickerViewControllerDelegate {
         filmstrip.addSubview(filmRow)
         view.addSubview(filmstrip)
 
-        filmCaption.text = "点照片右上角 ✕ 删除"
+        filmCaption.text = String(localized: "点照片右上角 ✕ 删除")
         filmCaption.font = .systemFont(ofSize: 12)
         filmCaption.textColor = UIColor(white: 1, alpha: 0.4)
         filmCaption.translatesAutoresizingMaskIntoConstraints = false
@@ -340,11 +340,11 @@ final class PhotoCaptureVC: UIViewController, PHPickerViewControllerDelegate {
         icon.tintColor = UIColor(white: 1, alpha: 0.5)
         icon.contentMode = .scaleAspectFit
         let title = UILabel()
-        title.text = "边录边拍"
+        title.text = String(localized: "边录边拍")
         title.font = .systemFont(ofSize: 14)
         title.textColor = UIColor(white: 1, alpha: 0.45)
         let sub = UILabel()
-        sub.text = "照片会附在这条录音里"
+        sub.text = String(localized: "照片会附在这条录音里")
         sub.font = .systemFont(ofSize: 12.5)
         sub.textColor = UIColor(white: 1, alpha: 0.35)
         let stack = UIStackView(arrangedSubviews: [icon, title, sub])
@@ -376,7 +376,7 @@ final class PhotoCaptureVC: UIViewController, PHPickerViewControllerDelegate {
             doneButton.layer.shadowOpacity = 0
         } else {
             leftPill.attributedText = nil
-            leftPill.text = " 已拍 \(shots.count) 张 "
+            leftPill.text = String(localized: " 已拍 \(shots.count) 张 ")
             doneButton.setTitleColor(.white, for: .normal)
             doneButton.backgroundColor = UIColor(red: 0xD8/255, green: 0x59/255, blue: 0x3B/255, alpha: 1)
             doneButton.layer.shadowColor = UIColor(red: 0xD8/255, green: 0x59/255, blue: 0x3B/255, alpha: 1).cgColor
@@ -408,7 +408,7 @@ final class PhotoCaptureVC: UIViewController, PHPickerViewControllerDelegate {
         dot.image = dotImg
         dot.bounds = CGRect(x: 0, y: -0.5, width: r, height: r)
         let s = NSMutableAttributedString(attachment: dot)
-        s.append(NSAttributedString(string: "  录音中 · \(mmss)  ",
+        s.append(NSAttributedString(string: String(localized: "  录音中 · \(mmss)  "),
                                     attributes: [.foregroundColor: UIColor(white: 1, alpha: 0.85),
                                                  .font: UIFont.systemFont(ofSize: 13)]))
         leftPill.attributedText = s

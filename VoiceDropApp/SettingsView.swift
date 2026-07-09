@@ -17,7 +17,7 @@ enum StyleNaming {
     /// 不当名字用（chip 会变一长条）。style 为 nil = 版本查不到（历史没加载/已修剪）。
     static func chipLabel(v: Int, style: String?) -> String {
         let n = style.map { name($0, max: 8) } ?? ""
-        guard !n.isEmpty, !n.hasSuffix("…") else { return "v\(v) 风格" }
+        guard !n.isEmpty, !n.hasSuffix("…") else { return String(localized: "v\(v) 风格") }
         return "v\(v) \(n)"
     }
 }
@@ -69,7 +69,7 @@ final class SettingsStore {
     private struct StyleResponse: Decodable { let style: String?; let name: String?; let styles: [Int]? }
 
     func load() async {
-        guard !token.isEmpty else { error = "请先登录"; return }
+        guard !token.isEmpty else { error = String(localized: "请先登录"); return }
         loading = true; error = nil
         defer { loading = false }
         // 文风：走 /style（读 CLAUDE.json，404 时服务端回退老 CLAUDE.md 的「# 我的文风」段）。
@@ -85,7 +85,7 @@ final class SettingsStore {
                     serverStyles = obj.styles ?? []
                 }
             } else if code != 404 {
-                error = "加载失败"
+                error = String(localized: "加载失败")
             }
         } catch { self.error = error.localizedDescription }
     }
@@ -121,7 +121,7 @@ final class SettingsStore {
     /// Move the head pointer to an existing version (PATCH /style/head) — no new
     /// version. Used when the user just switched to a saved version without editing.
     func setStyleHead(_ head: Int) async {
-        guard !token.isEmpty else { error = "请先登录"; return }
+        guard !token.isEmpty else { error = String(localized: "请先登录"); return }
         saving = true; saved = false; error = nil
         defer { saving = false }
         var req = URLRequest(url: base.appending(path: "style").appending(path: "head"))
@@ -131,7 +131,7 @@ final class SettingsStore {
         let body = (try? JSONEncoder().encode(["head": head])) ?? Data()
         do {
             let (_, resp) = try await URLSession.shared.upload(for: req, from: body)
-            guard resp.isOK else { error = "保存失败"; return }
+            guard resp.isOK else { error = String(localized: "保存失败"); return }
             styleHead = head
             saved = true
         } catch { self.error = error.localizedDescription }
@@ -165,7 +165,7 @@ final class SettingsStore {
     }
 
     func saveStyle() async {
-        guard !token.isEmpty else { error = "请先登录"; return }
+        guard !token.isEmpty else { error = String(localized: "请先登录"); return }
         let trimmed = style.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         saving = true; saved = false; error = nil
@@ -177,7 +177,7 @@ final class SettingsStore {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let payload = try JSONEncoder().encode(StylePayload(style: trimmed))
             let (_, resp) = try await URLSession.shared.upload(for: req, from: payload)
-            guard resp.isOK else { error = "保存失败"; return }
+            guard resp.isOK else { error = String(localized: "保存失败"); return }
             saved = true
         } catch { self.error = error.localizedDescription }
     }
@@ -244,10 +244,10 @@ final class SettingsStore {
         let appid = wechatAppId.trimmingCharacters(in: .whitespacesAndNewlines)
         let secret = wechatSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         guard appid.range(of: "^wx[0-9A-Za-z]{16}$", options: .regularExpression) != nil else {
-            return "AppID 格式不对（应为 wx 开头、共 18 位）"
+            return String(localized: "AppID 格式不对（应为 wx 开头、共 18 位）")
         }
         guard secret.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else {
-            return "AppSecret 格式不对（应为 32 位小写十六进制，别把 AppID 填进来）"
+            return String(localized: "AppSecret 格式不对（应为 32 位小写十六进制，别把 AppID 填进来）")
         }
         var c = URLComponents(string: "https://api.weixin.qq.com/cgi-bin/token")!
         c.queryItems = [
@@ -262,13 +262,13 @@ final class SettingsStore {
             if obj?["access_token"] != nil { return nil }
             switch obj?["errcode"] as? Int ?? -1 {
             case 0, 40164: return nil                                   // appid OK; IP not whitelisted (expected from the phone)
-            case 40013:    return "AppID 无效，找不到这个公众号"
-            case 40125:    return "AppSecret 无效"
-            case 41002:    return "缺少 AppID"
-            case 41004:    return "缺少 AppSecret"
+            case 40013:    return String(localized: "AppID 无效，找不到这个公众号")
+            case 40125:    return String(localized: "AppSecret 无效")
+            case 41002:    return String(localized: "缺少 AppID")
+            case 41004:    return String(localized: "缺少 AppSecret")
             default:
-                let msg = obj?["errmsg"] as? String ?? "未知错误"
-                return "验证失败：\(msg)"
+                let msg = obj?["errmsg"] as? String ?? String(localized: "未知错误")
+                return String(localized: "验证失败：\(msg)")
             }
         } catch {
             return nil   // can't reach WeChat — format already checked; don't block the save
@@ -276,7 +276,7 @@ final class SettingsStore {
     }
 
     func saveWechat() async {
-        guard !token.isEmpty else { wechatError = "请先登录"; return }
+        guard !token.isEmpty else { wechatError = String(localized: "请先登录"); return }
         savingWechat = true; savedWechat = false; wechatError = nil
         defer { savingWechat = false }
         if let err = await validateWechatCreds() { wechatError = err; return }   // don't save invalid creds
@@ -299,7 +299,7 @@ final class SettingsStore {
             enabled: wechatEnabled,
             thumb_media_id: wechatThumbMediaId.isEmpty ? nil : wechatThumbMediaId
         )
-        guard let body = try? JSONEncoder().encode(cfg) else { wechatError = "编码失败"; return }
+        guard let body = try? JSONEncoder().encode(cfg) else { wechatError = String(localized: "编码失败"); return }
         var req = URLRequest(url: base.appending(path: "upload").appending(path: "WECHAT.json"))
         req.httpMethod = "PUT"
         req.setBearer(token)
@@ -307,7 +307,7 @@ final class SettingsStore {
         do {
             let (_, resp) = try await URLSession.shared.upload(for: req, from: body)
             guard resp.isOK else {
-                wechatError = "保存失败"; return
+                wechatError = String(localized: "保存失败"); return
             }
             savedWechat = true
         } catch { wechatError = error.localizedDescription }
@@ -423,7 +423,7 @@ struct SettingsView: View {
                     SettingsCard {
                         NavigationLink { AccountView() } label: {
                             SettingsRow(tileBG: Theme.inkTile, symbol: "checkmark.shield.fill", tileFG: .white,
-                                        title: "账户", subtitle: "无需登录 · ID 已随 iCloud 钥匙串备份") {
+                                        title: String(localized: "账户"), subtitle: String(localized: "无需登录 · ID 已随 iCloud 钥匙串备份")) {
                                 HStack(spacing: 8) {
                                     Text(shortTag).font(.system(size: 13, design: .monospaced)).foregroundStyle(Theme.faint)
                                     settingsChevron
@@ -434,10 +434,10 @@ struct SettingsView: View {
                         settingsRowDivider
                         NavigationLink { UsageView() } label: {
                             SettingsRow(tileBG: Theme.amberSoft, symbol: "bolt.fill", tileFG: Theme.amber,
-                                        title: "算力",
+                                        title: String(localized: "算力"),
                                         subtitle: store.suanliLoaded
-                                            ? "约可成文 \(Suanli.articles(store.suanliBalance)) 篇"
-                                            : "余额与消耗明细") {
+                                            ? String(localized: "约可成文 \(Suanli.articles(store.suanliBalance)) 篇")
+                                            : String(localized: "余额与消耗明细")) {
                                 HStack(spacing: 8) {
                                     if store.suanliLoaded {
                                         Text("\(Int(store.suanliBalance.rounded()))")
@@ -450,13 +450,13 @@ struct SettingsView: View {
                     }
 
                     // 写作 — 名字（新）· 写作风格（含成文后追问）· AI 指令
-                    group("写作") {
+                    group(String(localized: "写作")) {
                         SettingsCard {
                             Button { showName = true } label: {
                                 SettingsRow(tileBG: Theme.tileNeutral, symbol: "person.text.rectangle", tileFG: Theme.secondary,
-                                            title: "名字", subtitle: "署名和挖文章时对你的称呼") {
+                                            title: String(localized: "名字"), subtitle: String(localized: "署名和挖文章时对你的称呼")) {
                                     HStack(spacing: 8) {
-                                        Text(store.name.isEmpty ? "未设置" : store.name)
+                                        Text(store.name.isEmpty ? String(localized: "未设置") : store.name)
                                             .font(.system(size: 15)).foregroundStyle(store.name.isEmpty ? Theme.faint : Theme.ink)
                                             .lineLimit(1)
                                         settingsChevron
@@ -466,42 +466,42 @@ struct SettingsView: View {
                             settingsRowDivider
                             Button { showStyle = true } label: {
                                 SettingsRow(tileBG: Theme.tileNeutral, symbol: "pencil", tileFG: Theme.secondary,
-                                            title: "写作风格", subtitle: "成文时模仿这套语气") { settingsChevron }
+                                            title: String(localized: "写作风格"), subtitle: String(localized: "成文时模仿这套语气")) { settingsChevron }
                             }.buttonStyle(.plain)
                             settingsRowDivider
                             NavigationLink { InstructionSettingsView() } label: {
                                 SettingsRow(tileBG: Theme.tileNeutral, symbol: "wand.and.stars", tileFG: Theme.secondary,
-                                            title: "AI 指令", subtitle: "自定义长按菜单里的每个动作") { settingsChevron }
+                                            title: String(localized: "AI 指令"), subtitle: String(localized: "自定义长按菜单里的每个动作")) { settingsChevron }
                             }.buttonStyle(.plain)
                         }
                     }
 
-                    group("发布") {
+                    group(String(localized: "发布")) {
                         SettingsCard {
                             Button { showWechat = true } label: {
                                 SettingsRow(tileBG: Theme.accentSoft, symbol: "paperplane.fill", tileFG: Theme.accent,
-                                            title: "微信公众号", subtitle: "成文一键推送到草稿箱") {
+                                            title: String(localized: "微信公众号"), subtitle: String(localized: "成文一键推送到草稿箱")) {
                                     HStack(spacing: 8) { wechatBadge; settingsChevron }
                                 }
                             }.buttonStyle(.plain)
                             settingsRowDivider
                             SettingsRow(tileBG: Theme.okBannerBG, symbol: "person.2.fill", tileFG: Theme.greenDone,
-                                        title: "自动分享到 VD社区", subtitle: "挖出新文章后自动发到社区") {
+                                        title: String(localized: "自动分享到 VD社区"), subtitle: String(localized: "挖出新文章后自动发到社区")) {
                                 Toggle("", isOn: autoShareBinding).labelsHidden().tint(Theme.accent)
                             }
                         }
                     }
 
-                    group("其他") {
+                    group(String(localized: "其他")) {
                         SettingsCard {
                             NavigationLink { DataBackupView(libraryStore: libraryStore) } label: {
                                 SettingsRow(tileBG: Theme.tileNeutral, symbol: "externaldrive", tileFG: Theme.secondary,
-                                            title: "数据与备份", subtitle: "iCloud 备份 · 导出数据") { settingsChevron }
+                                            title: String(localized: "数据与备份"), subtitle: String(localized: "iCloud 备份 · 导出数据")) { settingsChevron }
                             }
                             settingsRowDivider
                             NavigationLink { AboutView() } label: {
                                 SettingsRow(tileBG: Theme.tileNeutral, symbol: "info.circle", tileFG: Theme.secondary,
-                                            title: "关于", subtitle: "隐私 · 公约 · 联系 · 版本 \(Prefs.versionBuild)") { settingsChevron }
+                                            title: String(localized: "关于"), subtitle: String(localized: "隐私 · 公约 · 联系 · 版本 \(Prefs.versionBuild)")) { settingsChevron }
                             }
                         }
                     }
@@ -619,22 +619,22 @@ struct DataBackupView: View {
             VStack(alignment: .leading, spacing: 10) {
                 SettingsCard {
                     SettingsRow(tileBG: Theme.tileNeutral, symbol: "icloud", tileFG: Theme.secondary,
-                                title: "备份到 iCloud", subtitle: "云端留底，换机不丢") {
+                                title: String(localized: "备份到 iCloud"), subtitle: String(localized: "云端留底，换机不丢")) {
                         Toggle("", isOn: Binding(get: { prefs.iCloudBackup }, set: { prefs.iCloudBackup = $0 }))
                             .labelsHidden().tint(Theme.accent)
                     }
                     settingsRowDivider
                     Button { showingExport = true } label: {
                         SettingsRow(tileBG: Theme.tileNeutral, symbol: "square.and.arrow.down",
-                                    tileFG: Theme.secondary, title: "导出数据",
-                                    subtitle: "所有录音和文章打包下载") { settingsChevron }
+                                    tileFG: Theme.secondary, title: String(localized: "导出数据"),
+                                    subtitle: String(localized: "所有录音和文章打包下载")) { settingsChevron }
                     }.buttonStyle(.plain)
                     settingsRowDivider
                     // 逃生门：录音已统一到 AVAudioEngine 后端（支持录音中随时开 AI 采访）。
                     // 万一新引擎在某些设备/耳机路由上异常，打开此项回到经典 AVAudioRecorder
                     // 路径（录音界面不再显示「采访」键）。稳定一两个版本后此行会删除。
                     SettingsRow(tileBG: Theme.tileNeutral, symbol: "mic.badge.xmark", tileFG: Theme.secondary,
-                                title: "经典录音引擎", subtitle: "录音异常时打开（关闭 AI 采访）") {
+                                title: String(localized: "经典录音引擎"), subtitle: String(localized: "录音异常时打开（关闭 AI 采访）")) {
                         Toggle("", isOn: Binding(get: { prefs.classicRecorder }, set: { prefs.classicRecorder = $0 }))
                             .labelsHidden().tint(Theme.accent)
                     }
@@ -667,22 +667,22 @@ struct AboutView: View {
                 SettingsCard {
                     Button { showPrivacy = true } label: {
                         SettingsRow(tileBG: Theme.tileNeutral, symbol: "hand.raised", tileFG: Theme.secondary,
-                                    title: "隐私说明") { settingsChevron }
+                                    title: String(localized: "隐私说明")) { settingsChevron }
                     }.buttonStyle(.plain)
                     settingsRowDivider
                     Button { showGuidelines = true } label: {
                         SettingsRow(tileBG: Theme.tileNeutral, symbol: "doc.text", tileFG: Theme.secondary,
-                                    title: "社区公约") { settingsChevron }
+                                    title: String(localized: "社区公约")) { settingsChevron }
                     }.buttonStyle(.plain)
                     settingsRowDivider
                     NavigationLink { BlockedUsersView() } label: {
                         SettingsRow(tileBG: Theme.tileNeutral, symbol: "hand.raised.slash", tileFG: Theme.secondary,
-                                    title: "已屏蔽用户") { settingsChevron }
+                                    title: String(localized: "已屏蔽用户")) { settingsChevron }
                     }
                     settingsRowDivider
                     Link(destination: URL(string: "mailto:\(CommunityTerms.supportEmail)?subject=VoiceDrop%20反馈与投诉")!) {
                         SettingsRow(tileBG: Theme.tileNeutral, symbol: "envelope", tileFG: Theme.secondary,
-                                    title: "联系我们 / 内容投诉") { settingsChevron }
+                                    title: String(localized: "联系我们 / 内容投诉")) { settingsChevron }
                     }.buttonStyle(.plain)
                 }
             }
@@ -752,8 +752,8 @@ struct WritingStyleSheet: View {
     }
     private var compareFooter: String {
         let vs = selectedVersions
-        let head = vs.isEmpty ? "勾选 2–3 个版本" : "完成后将分别用 " + vs.map { "v\($0)" }.joined(separator: "、")
-        return head + "，成文时各生成一篇，在阅读页顶部切换对比。最多选 3 个。"
+        let head = vs.isEmpty ? String(localized: "勾选 2–3 个版本") : String(localized: "完成后将分别用 ") + vs.map { "v\($0)" }.joined(separator: "、")
+        return head + String(localized: "，成文时各生成一篇，在阅读页顶部切换对比。最多选 3 个。")
     }
 
     var body: some View {
@@ -841,7 +841,7 @@ struct WritingStyleSheet: View {
                     }
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(Theme.accent, in: RoundedRectangle(cornerRadius: 6))
-                    Text(selectedVersions.isEmpty ? "未选版本" : "已选 " + selectedVersions.map { "v\($0)" }.joined(separator: "、"))
+                    Text(selectedVersions.isEmpty ? String(localized: "未选版本") : String(localized: "已选 ") + selectedVersions.map { "v\($0)" }.joined(separator: "、"))
                         .font(.system(size: 13)).foregroundStyle(Theme.secondary).lineLimit(1)
                     Spacer(minLength: 8)
                     Text("\(prefs.styles.count) / 3").font(.system(size: 13)).foregroundStyle(Theme.faint)
@@ -1036,7 +1036,7 @@ struct WechatSettingsSheet: View {
                             HStack(spacing: 6) {
                                 if store.savingWechat { ProgressView().tint(.white) }
                                 else if store.savedWechat { Image(systemName: "checkmark").font(.system(size: 13)) }
-                                Text(store.savedWechat ? "已保存" : "保存").font(.system(size: 16, weight: .semibold))
+                                Text(store.savedWechat ? String(localized: "已保存") : String(localized: "保存")).font(.system(size: 16, weight: .semibold))
                             }
                             .foregroundStyle(.white).frame(maxWidth: .infinity).padding(.vertical, 14)
                             .background(Theme.accent, in: RoundedRectangle(cornerRadius: Theme.R.primary))

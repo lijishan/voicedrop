@@ -102,7 +102,7 @@ struct LibraryView: View {
     // independently, keeping each well under budget. Do NOT re-collapse into one chain.
     var body: some View {
         rowAlerts
-            .alert(confirmPrompt?.summary ?? "确认操作",
+            .alert(confirmPrompt?.summary ?? String(localized: "确认操作"),
                    isPresented: clearBinding({ confirmPrompt != nil }, { confirmPrompt = nil }),
                    presenting: confirmPrompt) { p in
                 // 语音指令 destructive confirm (e.g. "删掉第二条") — the server asks
@@ -293,8 +293,8 @@ struct LibraryView: View {
         // article tag (newest first). With no tags the layout is unchanged.
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .firstTextBaseline, spacing: 20) {
-                tabLabel("我的录音", .recordings)
-                tabLabel("VD社区", .community)
+                tabLabel(String(localized: "我的录音"), .recordings)
+                tabLabel(String(localized: "VD社区"), .community)
                 ForEach(allTags, id: \.self) { t in
                     tabLabel(t, .tag(t))
                 }
@@ -323,21 +323,21 @@ struct LibraryView: View {
     // MARK: List
 
     @ViewBuilder private var recordingsContent: some View {
-        recordingsList(rows, emptyTitle: "还没有录音",
-                       emptyHint: "点下面的红键录一条，过会儿服务器会自动转写并挖成文章。")
+        recordingsList(rows, emptyTitle: String(localized: "还没有录音"),
+                       emptyHint: String(localized: "点下面的红键录一条，过会儿服务器会自动转写并挖成文章。"))
     }
 
     /// A tag tab's page: the same rows, filtered to articles carrying that tag.
     @ViewBuilder private func tagContent(_ t: String) -> some View {
         recordingsList(rows.filter { $0.tags?.contains(t) ?? false },
-                       emptyTitle: "还没有文章", emptyHint: "「\(t)」标签下还没有文章。")
+                       emptyTitle: String(localized: "还没有文章"), emptyHint: String(localized: "「\(t)」标签下还没有文章。"))
     }
 
     @ViewBuilder private func recordingsList(_ list: [Recording], emptyTitle: String, emptyHint: String) -> some View {
         if store.loading && list.isEmpty {
             Spacer(); ProgressView().tint(Theme.recordRed); Spacer()
         } else if let err = store.error, list.isEmpty {
-            Spacer(); message("加载失败", err); Spacer()
+            Spacer(); message(String(localized: "加载失败"), err); Spacer()
         } else if list.isEmpty {
             Spacer(); message(emptyTitle, emptyHint); Spacer()
         } else {
@@ -381,9 +381,9 @@ struct LibraryView: View {
         if community.loading && community.posts.isEmpty {
             Spacer(); ProgressView().tint(Theme.accent); Spacer()
         } else if let err = community.error, community.posts.isEmpty {
-            Spacer(); message("加载失败", err); Spacer()
+            Spacer(); message(String(localized: "加载失败"), err); Spacer()
         } else if community.posts.isEmpty {
-            Spacer(); message("VD社区还没有分享", "在文章右上角 ⋯ 里点「分享到 VD社区」，大家就能看到。"); Spacer()
+            Spacer(); message(String(localized: "VD社区还没有分享"), String(localized: "在文章右上角 ⋯ 里点「分享到 VD社区」，大家就能看到。")); Spacer()
         } else {
             List {
                 ForEach(community.posts) { post in
@@ -413,10 +413,10 @@ struct LibraryView: View {
                 .frame(width: 42, height: 42)
                 .overlay(Image(systemName: "doc.text").font(.system(size: 17)).foregroundStyle(Theme.accent))
             VStack(alignment: .leading, spacing: 5) {
-                Text(post.title ?? "(无题)").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
+                Text(post.title ?? String(localized: "(无题)")).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.ink)
                     .lineLimit(1).truncationMode(.tail)
                 HStack(spacing: 9) {
-                    Text(post.author ?? "匿名").font(.system(size: 13)).foregroundStyle(Theme.accent)
+                    Text(post.author ?? String(localized: "匿名")).font(.system(size: 13)).foregroundStyle(Theme.accent)
                     Text(communityDate(post.firstSharedAt)).font(.system(size: 13)).foregroundStyle(Theme.metaChrome)
                 }
             }
@@ -512,11 +512,11 @@ struct LibraryView: View {
                 Text("正在上传").font(.system(size: 12.5)).foregroundStyle(Theme.recordRed)
             }
         } else if rec.hasArticles {
-            badge(Theme.greenDone, "已成文")
+            badge(Theme.greenDone, String(localized: "已成文"))
                 .contentShape(Rectangle())
                 .onLongPressGesture { confirmReprocess = rec }
         } else if rec.isEmpty {
-            badge(Theme.faint, "无语音")
+            badge(Theme.faint, String(localized: "无语音"))
         } else if let phase = rec.phase {
             HStack(spacing: 5) {
                 ProgressView().controlSize(.mini).tint(Theme.accent)
@@ -525,7 +525,7 @@ struct LibraryView: View {
         } else if let r = rec.blockReason {
             badge(Color(hex: "C0392B"), BlockReason(rawValue: r)?.label ?? BlockReason.noCredit.label)
         } else {
-            badge(Theme.amberPending, "待处理")
+            badge(Theme.amberPending, String(localized: "待处理"))
         }
     }
 
@@ -561,7 +561,7 @@ struct LibraryView: View {
                 .scaleEffect(talking ? 1.08 : 1)
                 .gesture(talkGesture)
                 .simultaneousGesture(TapGesture().onEnded { if !talking { recordLaunch = RecordLaunch(tag: nil) } })
-            Text(talking ? (willCancel ? "上滑取消 · 松开放弃" : "松开发送 · 上滑取消") : "轻点录音 · 长按说话")
+            Text(talking ? (willCancel ? String(localized: "上滑取消 · 松开放弃") : String(localized: "松开发送 · 上滑取消")) : String(localized: "轻点录音 · 长按说话"))
                 .font(.system(size: 12)).tracking(1)
                 .foregroundStyle(talking ? Theme.accent : Theme.secondary)
         }

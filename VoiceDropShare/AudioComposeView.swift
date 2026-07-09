@@ -21,14 +21,14 @@ struct AudioComposeView: View {
     @State private var uploadFailed = false
     /// 写作风格 row value — starts neutral, replaced by `loadStyle()` once the
     /// user's actual style loads (never a fake placeholder; see that func).
-    @State private var styleLabel = "未设置"
+    @State private var styleLabel = String(localized: "未设置")
 
     /// A filename-derived title — the design's "来自 备忘录" source-app label
     /// isn't reliably available from a Share Extension, so this stands in for it.
     private var displayName: String {
-        guard let url = payload.audio else { return "语音备忘录" }
+        guard let url = payload.audio else { return String(localized: "语音备忘录") }
         let stem = url.deletingPathExtension().lastPathComponent
-        return stem.isEmpty ? "语音备忘录" : stem
+        return stem.isEmpty ? String(localized: "语音备忘录") : stem
     }
 
     /// Rough estimate shown to the user before generating: ASR ¥0.8/hr × 23
@@ -210,9 +210,9 @@ struct AudioComposeView: View {
                 .padding(.horizontal, 6)
 
             VStack(spacing: 0) {
-                settingsRow(title: "写作风格", value: styleLabel)
+                settingsRow(title: String(localized: "写作风格"), value: styleLabel)
                 Rectangle().fill(Color(hex: "F0E8DA")).frame(height: 1)
-                settingsRow(title: "识别语言", value: "中文（自动）")
+                settingsRow(title: String(localized: "识别语言"), value: String(localized: "中文（自动）"))
             }
             .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.white))
             .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(Color(hex: "ECE3D5"), lineWidth: 1))

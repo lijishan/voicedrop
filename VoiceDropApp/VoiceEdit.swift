@@ -134,7 +134,7 @@ final class SpeechDictation {
         let mic = await AVAudioApplication.requestRecordPermission()
         authorized = mic
         if !mic {
-            error = "需要在设置里允许麦克风权限。"
+            error = String(localized: "需要在设置里允许麦克风权限。")
         } else {
             error = nil
         }
@@ -143,7 +143,7 @@ final class SpeechDictation {
     func start() {
         guard authorized == true, !isRecording else { return }
         guard !AuthStore.shared.bearer.isEmpty else {
-            error = "未登录，无法连接语音识别服务。"
+            error = String(localized: "未登录，无法连接语音识别服务。")
             return
         }
         transcript = ""
@@ -209,7 +209,7 @@ final class SpeechDictation {
             sampleRate: Int(ASRProxyConfig.sampleRate)
         ))) { [weak self] err in
             guard let err else { return }
-            Task { @MainActor in self?.error = "语音识别初始化失败：\(err.localizedDescription)" }
+            Task { @MainActor in self?.error = String(localized: "语音识别初始化失败：\(err.localizedDescription)") }
         }
     }
 
@@ -222,11 +222,11 @@ final class SpeechDictation {
             throw NSError(
                 domain: "VoiceDrop.VolcASR",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "麦克风输入不可用，请检查模拟器或系统麦克风权限。"]
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "麦克风输入不可用，请检查模拟器或系统麦克风权限。")]
             )
         }
         guard let audioStreamer else {
-            throw NSError(domain: "VoiceDrop.VolcASR", code: 3, userInfo: [NSLocalizedDescriptionKey: "语音识别连接尚未初始化"])
+            throw NSError(domain: "VoiceDrop.VolcASR", code: 3, userInfo: [NSLocalizedDescriptionKey: String(localized: "语音识别连接尚未初始化")])
         }
 
         if tapInstalled {
@@ -273,7 +273,7 @@ final class SpeechDictation {
                         self.stopping = false
                     } else {
                         EngineRecorder.trace("dictation: WS FAILED mid-turn — \(err.localizedDescription)")
-                        self.error = "语音识别连接中断：\(err.localizedDescription)"
+                        self.error = String(localized: "语音识别连接中断：\(err.localizedDescription)")
                     }
                 case .success(let message):
                     self.handle(message)
@@ -295,7 +295,7 @@ final class SpeechDictation {
             let parsed = try VolcASRProtocol.parseServerMessage(data)
             if parsed.isError {
                 EngineRecorder.trace("dictation: VOLC ERROR \(parsed.errorCode.map(String.init) ?? "?") \(parsed.errorMessage ?? "")")
-                error = "语音识别错误 \(parsed.errorCode.map(String.init) ?? "")：\(parsed.errorMessage ?? "未知错误")"
+                error = String(localized: "语音识别错误 \(parsed.errorCode.map(String.init) ?? "")：\(parsed.errorMessage ?? "未知错误")")
                 stopping = false
                 return
             }
@@ -304,7 +304,7 @@ final class SpeechDictation {
             }
             if parsed.isFinal { stopping = false }
         } catch {
-            self.error = "语音识别响应解析失败：\(error.localizedDescription)"
+            self.error = String(localized: "语音识别响应解析失败：\(error.localizedDescription)")
         }
     }
 

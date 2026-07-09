@@ -73,9 +73,9 @@ final class DeviceLinkResponder {
             do {
                 let (epk, sealed) = try DeviceLinkCrypto.encrypt(token: AuthStore.shared.anonToken, toPubB64: p.pubkey)
                 try await post("complete", body: ["pairingId": pairingId, "blob": ["epk": epk, "sealed": sealed]])
-                status = "已在新设备登录"
+                status = String(localized: "已在新设备登录")
             } catch {
-                status = "登录失败"
+                status = String(localized: "登录失败")
             }
             pending = nil
         }
@@ -142,7 +142,7 @@ final class DeviceLinkStore: NSObject, URLSessionWebSocketDelegate {
         guard phase == .enterId else { return }
         let hex = prefix.trimmingCharacters(in: .whitespaces).lowercased()
         guard hex.range(of: "^[0-9a-f]{6}$", options: .regularExpression) != nil else {
-            message = "请输入 6 位代码（设置→账户里那串）"; return
+            message = String(localized: "请输入 6 位代码（设置→账户里那串）"); return
         }
         phase = .working; message = ""
         let (p, pub) = DeviceLinkCrypto.newKeypair()
@@ -151,14 +151,14 @@ final class DeviceLinkStore: NSObject, URLSessionWebSocketDelegate {
             do {
                 let r = try await postJSON("start", ["prefix": hex, "pubkey": pub])
                 if (r["ok"] as? Bool) != true {
-                    message = (r["reason"] as? String) == "no_match" ? "没找到这个账号，确认老设备设置页的 6 位码" : "发起失败"
+                    message = (r["reason"] as? String) == "no_match" ? String(localized: "没找到这个账号，确认老设备设置页的 6 位码") : String(localized: "发起失败")
                     phase = .error; return
                 }
-                guard let pid = r["pairingId"] as? String else { phase = .error; message = "发起失败"; return }
+                guard let pid = r["pairingId"] as? String else { phase = .error; message = String(localized: "发起失败"); return }
                 pairingId = pid
                 openSocket(pairingId: pid)
                 phase = .enterCode
-            } catch { phase = .error; message = "网络错误" }
+            } catch { phase = .error; message = String(localized: "网络错误") }
         }
     }
 
@@ -166,21 +166,21 @@ final class DeviceLinkStore: NSObject, URLSessionWebSocketDelegate {
     func submit(code: String) {
         guard phase == .enterCode else { return }
         guard let pid = pairingId, code.range(of: "^[0-9]{4}$", options: .regularExpression) != nil else {
-            message = "请输入 4 位验证码"; return
+            message = String(localized: "请输入 4 位验证码"); return
         }
         phase = .working; message = ""
         Task {
             do {
                 let r = try await postJSON("verify", ["pairingId": pid, "code": code])
                 if (r["ok"] as? Bool) == true {
-                    message = "正在接收账号…"   // wait for link_ready on the socket
+                    message = String(localized: "正在接收账号…")   // wait for link_ready on the socket
                 } else if (r["dead"] as? Bool) == true || (r["expired"] as? Bool) == true {
-                    phase = .error; message = "验证已失效，请重新发起"
+                    phase = .error; message = String(localized: "验证已失效，请重新发起")
                 } else {
                     let rem = r["remaining"] as? Int ?? 0
-                    phase = .enterCode; message = "验证码不对，还可试 \(rem) 次"
+                    phase = .enterCode; message = String(localized: "验证码不对，还可试 \(rem) 次")
                 }
-            } catch { phase = .error; message = "网络错误" }
+            } catch { phase = .error; message = String(localized: "网络错误") }
         }
     }
 
@@ -206,7 +206,7 @@ final class DeviceLinkStore: NSObject, URLSessionWebSocketDelegate {
                 case .failure(let err):
                     if (err as NSError).code != URLError.cancelled.rawValue {
                         self.phase = .error
-                        self.message = "连接断开，请重新发起"
+                        self.message = String(localized: "连接断开，请重新发起")
                         self.closeSocket()
                     }
                 }
@@ -229,16 +229,16 @@ final class DeviceLinkStore: NSObject, URLSessionWebSocketDelegate {
         case "link_ready":
             guard let blob = o["blob"] as? [String: Any],
                   let epk = blob["epk"] as? String, let sealed = blob["sealed"] as? String,
-                  let priv = self.priv else { phase = .error; message = "解密失败"; return }
+                  let priv = self.priv else { phase = .error; message = String(localized: "解密失败"); return }
             do {
                 let token = try DeviceLinkCrypto.decrypt(epkB64: epk, sealedB64: sealed, priv: priv)
                 AuthStore.shared.adoptToken(token)
                 NotificationCenter.default.post(name: .vdDidAdoptAccount, object: nil)
-                phase = .done; message = "登录成功"
+                phase = .done; message = String(localized: "登录成功")
                 closeSocket()
-            } catch { phase = .error; message = "解密失败" }
-        case "link_cancelled": phase = .error; message = "对方已拒绝"; closeSocket()
-        case "link_expired": phase = .error; message = "已超时，请重新发起"; closeSocket()
+            } catch { phase = .error; message = String(localized: "解密失败") }
+        case "link_cancelled": phase = .error; message = String(localized: "对方已拒绝"); closeSocket()
+        case "link_expired": phase = .error; message = String(localized: "已超时，请重新发起"); closeSocket()
         default: break
         }
     }

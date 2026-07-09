@@ -98,7 +98,7 @@ struct RecordingDetailView: View {
         Button { showRestyle = true } label: {
             HStack(spacing: 4) {
                 Image(systemName: "pencil").font(.system(size: 11))
-                Text(currentStyleLabel ?? "选风格").font(.system(size: 13))
+                Text(currentStyleLabel ?? String(localized: "选风格")).font(.system(size: 13))
                 Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.chevron)
             }
             .foregroundStyle(Theme.metaRead)
@@ -124,7 +124,7 @@ struct RecordingDetailView: View {
                 articleIndex = 0
                 await loadVersionHistory()
             } else {
-                toast = "重写失败，稍后再试"
+                toast = String(localized: "重写失败，稍后再试")
             }
             restyling = false
         }
@@ -229,7 +229,7 @@ struct RecordingDetailView: View {
         } : nil
         let mapper: ((String) -> String)? = answering ? { [self] text in followupInstruction(text) } : nil
         let didSend: (() -> Void)? = answering ? { [self] in followupAnswerSent() } : nil
-        let label: String = answering ? "按住 说话 回答" : "按住 说话 修改"
+        let label: String = answering ? String(localized: "按住 说话 回答") : String(localized: "按住 说话 修改")
         return PushToTalkBar(dictation: dictation, session: agent, highlightLocators: true,
                              articleIndex: { articleIndex }, agentReply: agentReply,
                              trailing: followupStar,
@@ -348,9 +348,9 @@ struct RecordingDetailView: View {
     private func insertPhotos(_ captured: [CapturedPhoto]) {
         showingInsertPhoto = false
         guard !captured.isEmpty else { return }
-        showToast("正在上传图片…")
+        showToast(String(localized: "正在上传图片…"))
         Task {
-            guard let sessionTs = RecordingName.parse(recording.stem)?.sessionTs else { showToast("无法插入图片"); return }
+            guard let sessionTs = RecordingName.parse(recording.stem)?.sessionTs else { showToast(String(localized: "无法插入图片")); return }
             // Offset = seconds from the recording start to this photo. For editor-
             // inserted photos that's "how long after recording it was added" (can be
             // large) — still unique & harmless; the offset semantics are only "录音内第几秒"
@@ -362,7 +362,7 @@ struct RecordingDetailView: View {
             for photo in captured {
                 let offset = sessionStart.map { Int(photo.date.timeIntervalSince($0)) } ?? 0
                 guard let key = await store.uploadPhoto(data: photo.data, sessionTs: sessionTs, offset: offset)
-                else { showToast("图片上传失败"); return }
+                else { showToast(String(localized: "图片上传失败")); return }
                 relKeys.append(key)
                 // Generate a 320×320 thumbnail and base64-encode it for the model to see.
                 if let thumb = makeThumbnail(from: photo.data) {
@@ -378,7 +378,7 @@ struct RecordingDetailView: View {
                 "我刚拍了\(countWord)，请把\(relKeys.count == 1 ? "它" : "每一张都")插入文章里最合适的位置。每张照片用它自己的标记（原样写进正文，放在和场景最相符的段落附近）：\(keysDesc)。所有照片必须全部插入，不能遗漏。",
                 images: agentImages, articleIndex: articleIndex
             )
-            showToast("图片已上传，AI正在插入…")
+            showToast(String(localized: "图片已上传，AI正在插入…"))
         }
     }
 
@@ -439,7 +439,7 @@ struct RecordingDetailView: View {
             .contentShape(Circle())
         }
         .buttonStyle(.plain).disabled(loadingAudio)
-        .accessibilityLabel(player.isPlaying ? "暂停" : "播放")
+        .accessibilityLabel(player.isPlaying ? String(localized: "暂停") : String(localized: "播放"))
         .animation(.linear(duration: 0.2), value: player.progress)   // 跟播放计时器 0.2s 节拍平滑推进
     }
 
@@ -489,7 +489,7 @@ struct RecordingDetailView: View {
     private var moreMenu: some View {
         Menu {
             Button { Task { await publishWechatTapped() } } label: {
-                Label(published ? "更新公众号草稿" : "发布公众号草稿", systemImage: "paperplane")
+                Label(published ? String(localized: "更新公众号草稿") : String(localized: "发布公众号草稿"), systemImage: "paperplane")
             }
             Toggle(isOn: Binding(
                 get: { sharedToCommunity },
@@ -566,7 +566,7 @@ struct RecordingDetailView: View {
         xhsWorking = true
         defer { xhsWorking = false }
         guard let pack = await store.xhsPack(recording) else {
-            showToast("小红书文案生成失败，稍后再试")
+            showToast(String(localized: "小红书文案生成失败，稍后再试"))
             return
         }
         UIPasteboard.general.string = pack.clipboardText
@@ -593,10 +593,10 @@ struct RecordingDetailView: View {
                 saved = images.count
             } catch { /* 存失败不拦路：文案还在剪贴板 */ }
         }
-        showToast(saved > 0 ? "文案已复制，\(saved) 张图文卡已存入相册" : "文案已复制")
+        showToast(saved > 0 ? String(localized: "文案已复制，\(saved) 张图文卡已存入相册") : String(localized: "文案已复制"))
         if let xhs = URL(string: "xhsdiscover://") {
             UIApplication.shared.open(xhs) { ok in
-                if !ok { Task { @MainActor in showToast("没检测到小红书 App，文案在剪贴板里") } }
+                if !ok { Task { @MainActor in showToast(String(localized: "没检测到小红书 App，文案在剪贴板里")) } }
             }
         }
     }
@@ -622,10 +622,10 @@ struct RecordingDetailView: View {
             if let shareId {
                 communityShareId = shareId
                 sharedToCommunity = true
-                showToast("已在 VD社区可见")
+                showToast(String(localized: "已在 VD社区可见"))
             } else {
                 sharedToCommunity = false
-                showToast("分享失败，请稍后再试")
+                showToast(String(localized: "分享失败，请稍后再试"))
             }
         } else {
             guard let shareId = communityShareId else { return }
@@ -633,10 +633,10 @@ struct RecordingDetailView: View {
             let ok = await community.unshare(shareId)
             if ok {
                 communityShareId = nil
-                showToast("已从 VD社区隐藏")
+                showToast(String(localized: "已从 VD社区隐藏"))
             } else {
                 sharedToCommunity = true
-                showToast("操作失败，请稍后再试")
+                showToast(String(localized: "操作失败，请稍后再试"))
             }
         }
     }
@@ -778,7 +778,7 @@ struct RecordingDetailView: View {
                 anchor: .text(text), frame: frame, menu: menu,
                 fill: { UIConfigStore.fill($0, ["LINE": String(line), "QUOTE": Self.quotePrefix(text)]) },
                 onPick: { agent.enqueue($0, articleIndex: articleIndex) },
-                localRows: [LongpressLocalRow(label: "拷贝", systemImage: "doc.on.doc",
+                localRows: [LongpressLocalRow(label: String(localized: "拷贝"), systemImage: "doc.on.doc",
                                               action: { UIPasteboard.general.string = text })]
             )
         }
@@ -920,8 +920,8 @@ struct RecordingDetailView: View {
     }
 
     private var pending: some View {
-        statusScreen(icon: "clock.arrow.circlepath", title: "还没成文",
-                     subtitle: "服务器每小时自动处理一次，过会儿再来看。")
+        statusScreen(icon: "clock.arrow.circlepath", title: String(localized: "还没成文"),
+                     subtitle: String(localized: "服务器每小时自动处理一次，过会儿再来看。"))
     }
 
     private var emptyState: some View {
@@ -935,16 +935,16 @@ struct RecordingDetailView: View {
     private var emptyDisplay: (icon: String, title: String, subtitle: String) {
         switch emptyReason {
         case "no-article":
-            return ("text.badge.xmark", "没挖出文章",
-                    "这段录音听到了，只是没找到能单独成篇的内容——可能太零碎，或者还没说成一件事。把想法讲完整一点、重录一段试试。")
+            return ("text.badge.xmark", String(localized: "没挖出文章"),
+                    String(localized: "这段录音听到了，只是没找到能单独成篇的内容——可能太零碎，或者还没说成一件事。把想法讲完整一点、重录一段试试。"))
         case "too-short":
-            return ("timer", "录得太短", "这段录音太短，没攒够能成文的内容。")
+            return ("timer", String(localized: "录得太短"), String(localized: "这段录音太短，没攒够能成文的内容。"))
         case "corrupt":
-            return ("exclamationmark.triangle", "文件损坏", "这条录音的文件损坏了，没法转写。")
+            return ("exclamationmark.triangle", String(localized: "文件损坏"), String(localized: "这条录音的文件损坏了，没法转写。"))
         case let r? where r.hasPrefix("asr-error"):
-            return ("exclamationmark.triangle", "转写没成", "这段录音转写时出错了，过会儿再试或重录一段。")
+            return ("exclamationmark.triangle", String(localized: "转写没成"), String(localized: "这段录音转写时出错了，过会儿再试或重录一段。"))
         default:   // no-speech / silent / empty-text / 未知
-            return ("speaker.slash", "没检测到语音", "这条录音里没有识别到说话声。")
+            return ("speaker.slash", String(localized: "没检测到语音"), String(localized: "这条录音里没有识别到说话声。"))
         }
     }
 
@@ -967,13 +967,13 @@ struct RecordingDetailView: View {
         switch result {
         case .ok(let created, let updated):
             // Real, synchronous result now — no more "约 1 分钟后".
-            showToast(created == 0 && updated > 0 ? "已更新草稿" : "已到草稿箱")
+            showToast(created == 0 && updated > 0 ? String(localized: "已更新草稿") : String(localized: "已到草稿箱"))
             published = true
         case .notConfigured:
             publishAfterSetup = true
             showingWechatSettings = true
         case .failed(let msg):
-            showToast(msg ?? "推送失败，请稍后再试")
+            showToast(msg ?? String(localized: "推送失败，请稍后再试"))
         }
     }
 
@@ -1288,7 +1288,7 @@ struct RestyleSheet: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 15, weight: .semibold))
-                Text(pick.map { "用 v\($0) 重写本文" } ?? "选一个版本")
+                Text(pick.map { String(localized: "用 v\($0) 重写本文") } ?? String(localized: "选一个版本"))
                     .font(.system(size: 16, weight: .semibold))
             }
             .foregroundStyle(.white).frame(maxWidth: .infinity).padding(.vertical, 15)

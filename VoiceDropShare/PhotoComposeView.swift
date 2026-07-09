@@ -22,7 +22,7 @@ struct PhotoComposeView: View {
     @State private var uploadFailed = false
     /// 写作风格 row value — starts neutral, replaced by `loadStyle()` once the
     /// user's actual style loads (never a fake placeholder; see that func).
-    @State private var styleLabel = "未设置"
+    @State private var styleLabel = String(localized: "未设置")
 
     /// Rough flat vision-cost estimate (no ASR/duration signal to key off, unlike
     /// audio) — matches the task brief's formula exactly: `max(1, 2 + N images)`.
@@ -117,7 +117,7 @@ struct PhotoComposeView: View {
                 .padding(.bottom, 8)
                 .padding(.horizontal, 6)
 
-            settingsRow(title: "写作风格", value: styleLabel)
+            settingsRow(title: String(localized: "写作风格"), value: styleLabel)
                 .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.white))
                 .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(Color(hex: "ECE3D5"), lineWidth: 1))
         }

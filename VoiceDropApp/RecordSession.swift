@@ -43,9 +43,9 @@ struct RecordSession: View {
     private var activeLevel: Double { classic ? recorder.level : interviewer.engine.level }
     private var interviewStatusText: String {
         switch interviewer.connState {
-        case .connecting: return "AI 连接中…"
-        case .live: return "AI 采访中 · 再点一下结束"
-        case .degraded: return "AI 已断开 · 录音继续"
+        case .connecting: return String(localized: "AI 连接中…")
+        case .live: return String(localized: "AI 采访中 · 再点一下结束")
+        case .degraded: return String(localized: "AI 已断开 · 录音继续")
         case .idle: return ""
         }
     }
@@ -57,11 +57,11 @@ struct RecordSession: View {
             case .starting:
                 ProgressView().tint(Theme.recordRed)
             case .denied:
-                messageScreen(title: "需要麦克风权限", subtitle: "VoiceDrop 要用麦克风录音。", primary: "去设置") { openSettings() }
+                messageScreen(title: String(localized: "需要麦克风权限"), subtitle: String(localized: "VoiceDrop 要用麦克风录音。"), primary: String(localized: "去设置")) { openSettings() }
             case .recording:
                 recordingScreen
             case .failed(let msg):
-                messageScreen(title: "录音出错", subtitle: msg, primary: "好") { onFinish() }
+                messageScreen(title: String(localized: "录音出错"), subtitle: msg, primary: String(localized: "好")) { onFinish() }
             }
         }
         .task {
@@ -81,7 +81,7 @@ struct RecordSession: View {
                 else { try interviewer.start(); sessionStart = interviewer.startDate }
                 phase = .recording
             }
-            catch { phase = .failed("无法开始录音：\(error.localizedDescription)") }
+            catch { phase = .failed(String(localized: "无法开始录音：\(error.localizedDescription)")) }
         }
         .onDisappear {
             // Safety net: any teardown path that didn't run stop() (a future dismissal
@@ -114,7 +114,7 @@ struct RecordSession: View {
             VStack(spacing: 6) {
                 HStack(spacing: 8) {
                     Circle().fill(Theme.recordRed).frame(width: 9, height: 9)
-                    Text(interviewer.interviewActive ? "AI 采访中" : "正在录音")
+                    Text(interviewer.interviewActive ? String(localized: "AI 采访中") : String(localized: "正在录音"))
                         .font(.system(size: 14)).tracking(2).foregroundStyle(Theme.secondary)
                 }
                 if interviewer.interviewActive {
@@ -194,7 +194,7 @@ struct RecordSession: View {
                                     .fixedSize()
                                     .offset(y: 42)
                             }
-                            .accessibilityLabel(interviewer.interviewActive ? "结束采访" : "开始采访")
+                            .accessibilityLabel(interviewer.interviewActive ? String(localized: "结束采访") : String(localized: "开始采访"))
                             .accessibilityAddTraits(.isButton)
                             .offset(x: -98)   // 左侧空白区水平中点，与右侧拍照对称
                     }
@@ -248,7 +248,7 @@ struct RecordSession: View {
             // Engine refused to hand over a take (e.g. the m4a was never created).
             // Show a REAL failure instead of silently closing as if nothing happened.
             if !classic, let err = interviewer.engine.engineError {
-                phase = .failed("录音失败：\(err)")
+                phase = .failed(String(localized: "录音失败：\(err)"))
             } else { onFinish() }
             return
         }
