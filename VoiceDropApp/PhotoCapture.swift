@@ -596,15 +596,16 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate, @unc
               let full = SquareImage.jpeg(image),
               let thumb = SquareImage.jpeg(image, maxSide: 264, maxBytes: 80_000)
         else { return }
-        // Also save a copy to the user's Photos library — the ORIGINAL sensor bytes
-        // (full resolution + EXIF, no re-encode), not the ≤1080 square upload JPEG:
-        // 相册是用户的底片库，按最高规格存；方图只是 App/R2 的上传口径。
+        // Also save a copy to the user's Photos library — the square WYSIWYG crop
+        // (matching the viewfinder) at FULL sensor resolution (≈3024×3024), not the
+        // ≤1080/<900KB upload JPEG: 相册按最高规格存，方图口径不变，只是不缩边。
         // Camera shots only; PHPicker imports already live there.
         // Needs NSPhotoLibraryAddUsageDescription; a denied permission just no-ops.
+        let album = SquareImage.jpeg(image, maxSide: .greatestFiniteMagnitude, maxBytes: Int.max) ?? full
         Task {
             if await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized {
                 try? await PHPhotoLibrary.shared().performChanges {
-                    PHAssetCreationRequest.forAsset().addResource(with: .photo, data: raw, options: nil)
+                    PHAssetCreationRequest.forAsset().addResource(with: .photo, data: album, options: nil)
                 }
             }
         }
