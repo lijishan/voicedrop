@@ -1,8 +1,26 @@
 # VoiceDrop — project state (read this first)
 
-Last updated: 2026-07-09
+Last updated: 2026-07-10
 
-## 最近大改：邀请奖励（referral，2026-07-09 上线）
+## 最近修复：采访者自顾自说个不停（2026-07-10）
+
+生产 ledger 坐实（多段采访 audio_out = audio_in 的 3~10 倍）。三个叠加根因、三处修：
+
+- **服务端 `agent/src/realtime.js`（jianshuo.dev repo，已部署）**：① session.update 加
+  `max_output_tokens: 300`——semantic_vad 自动触发的回应从不走 app 的 response.create(120)，
+  此前无任何长度上限；② 提示词删「他一说完你就要接住，不让对话冷场」（这是在命令模型填满
+  每个沉默），加三条铁律：说完即停 / **绝不连续发言**（等讲者说出新内容才能再开口）/
+  听到回声噪音保持沉默。有测试锁行为（realtime-route.test.js：上限有界 + 铁律措辞在、
+  冷场措辞不在）。
+- **iOS 半双工开麦前清残留**：闭麦经常把讲者的话截成半截留在 OpenAI 输入缓冲里，开麦后
+  第一帧新音频会把这半截「封口」→ semantic_vad 判定「说完了」→ 又自动回一条 → 连环。
+  现在 `RealtimeInterviewer.openMic()`（resume 与 15s watchdog 两条路都走它）先发
+  `input_audio_buffer.clear` 再放开上行（`RealtimeSession.clearInputBuffer()`）。
+- **验证**：agent 全量 73 文件 687 用例绿；iOS xcodebuild BUILD SUCCEEDED；行为效果待
+  真机采访实测——如果还犯，下一个观察点是 400ms 回声尾巴是否够长（EngineRecorder
+  `.dataPlayedBack` → +400ms 开麦）以及 eagerness:"medium" 是否退回 "low"。
+
+## 上一个大改：邀请奖励（referral，2026-07-09 上线）
 
 带来新装的作者和新用户双边得算力。spec = `docs/superpowers/specs/2026-07-09-referral-rewards-design.md`，
 plan = `docs/superpowers/plans/2026-07-09-referral-rewards.md`。**已部署 + 生产冒烟**（link 层与

@@ -142,8 +142,17 @@ final class RealtimeInterviewer: RecordingBackend {
         muteWatchdog = Task { [weak self] in
             try? await Task.sleep(for: .seconds(15))
             guard !Task.isCancelled else { return }
-            self?.aiSpeaking = false
+            self?.openMic()
         }
+    }
+
+    /// Re-open the uplink. Clears OpenAI's input buffer FIRST: the mute likely cut the
+    /// speaker off mid-utterance, and that stale half-segment would be closed by the
+    /// first fresh audio — semantic_vad reads it as a finished turn and auto-fires yet
+    /// another response, chaining into the "AI 自顾自说个不停" loop.
+    private func openMic() {
+        if interviewActive { session.clearInputBuffer() }
+        aiSpeaking = false
     }
 
     /// Resume the uplink ONLY after the AI has finished generating (response.done)
@@ -155,7 +164,7 @@ final class RealtimeInterviewer: RecordingBackend {
             try? await Task.sleep(for: .milliseconds(400))   // room echo tail
             guard !Task.isCancelled else { return }
             self?.muteWatchdog?.cancel()
-            self?.aiSpeaking = false
+            self?.openMic()
         }
     }
 

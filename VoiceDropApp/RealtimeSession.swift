@@ -11,7 +11,7 @@ import Foundation
 /// Event names verified live 2026-07-08 against the deployed relay:
 ///   receive: input_audio_buffer.speech_started / .speech_stopped,
 ///            response.output_audio.delta (AI voice, base64 PCM16 24k)
-///   send:    input_audio_buffer.append / response.create / response.cancel
+///   send:    input_audio_buffer.append / .clear / response.create / response.cancel
 @MainActor
 final class RealtimeSession {
     enum State: String { case idle, connecting, live, degraded }
@@ -106,6 +106,15 @@ final class RealtimeSession {
 
     func cancelResponse() {
         send(["type": "response.cancel"])
+    }
+
+    /// Drop whatever partial speech is sitting in OpenAI's input buffer. Called by the
+    /// half-duplex gate right before re-opening the mic: muting often cuts the speaker
+    /// off MID-UTTERANCE, and that truncated segment would otherwise be closed by the
+    /// first post-unmute (silent) audio — semantic_vad reads "speech then stopped" and
+    /// auto-fires ANOTHER response with the user having said nothing new.
+    func clearInputBuffer() {
+        send(["type": "input_audio_buffer.clear"])
     }
 
     private func send(_ obj: [String: Any]) {
