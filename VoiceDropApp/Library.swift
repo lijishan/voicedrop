@@ -708,7 +708,7 @@ final class LibraryStore {
         req.setBearer(token)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONEncoder().encode(Req(stem: rec.stem, styleV: styleV))
-        req.timeoutInterval = 120   // a mine LLM call can take a while
+        req.timeoutInterval = 300   // 长文重写生成可超 2 分钟；就算这里超时，WS 的 preview-done 也会收尾
         guard let (data, resp) = try? await URLSession.shared.data(for: req), resp.isOK,
               let r = try? JSONDecoder().decode(Resp.self, from: data), r.ok else { return nil }
         return r.head

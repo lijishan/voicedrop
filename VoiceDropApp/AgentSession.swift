@@ -38,6 +38,13 @@ final class ArticleAgentSession: VoiceAgentSession {
     var onUpdate: ((ArticleDoc?, [String]) -> Void)?
     var onReply: ((String, Bool) -> Void)?
 
+    /// 实时预览（换风格/重写）：服务端边生成边推的纯文本增量。
+    /// a = 文章下标，field = "title" | "body"。
+    struct PreviewDelta: Equatable { let a: Int; let field: String; let text: String }
+    var onPreview: (([PreviewDelta]) -> Void)?
+    var onPreviewReset: (() -> Void)?
+    var onPreviewDone: ((Bool) -> Void)?
+
     private var task: URLSessionWebSocketTask?
     private var session: URLSession?
     private var rec: Recording?
@@ -168,6 +175,16 @@ final class ArticleAgentSession: VoiceAgentSession {
             if queue.isEmpty { state = .error }
         case "snapshot":
             reconcile(obj)
+        case "preview-delta":
+            let deltas = ((obj["items"] as? [[String: Any]]) ?? []).compactMap { it -> PreviewDelta? in
+                guard let a = it["a"] as? Int, let f = it["field"] as? String, let t = it["text"] as? String else { return nil }
+                return PreviewDelta(a: a, field: f, text: t)
+            }
+            if !deltas.isEmpty { onPreview?(deltas) }
+        case "preview-reset":
+            onPreviewReset?()
+        case "preview-done":
+            onPreviewDone?(obj["ok"] as? Bool ?? true)
         default:
             break
         }

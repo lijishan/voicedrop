@@ -52,6 +52,7 @@ struct RecordingDetailView: View {
     @State private var showingInsertPhoto = false
     @State private var showRestyle = false       // 换风格重写 sheet
     @State private var restyling = false         // /agent/restyle in flight
+    @State private var preview: [(title: String, body: String)] = []   // 重写实时预览（幽灵稿），按文章下标累积
     @State private var lpMenu: LongpressPresentation?   // 长按操作菜单（自绘覆盖层）
 
     // Undo/redo: versions (oldest-first) + head loaded on open and refreshed after
@@ -118,28 +119,76 @@ struct RecordingDetailView: View {
         }
         Task {
             restyling = true
-            if let _ = await store.restyle(recording, styleV: v) {
-                doc = await store.fetchDoc(recording)
-                followup.load(doc)   // 重挖带来新一轮追问，整组换掉
-                articleIndex = 0
-                await loadVersionHistory()
-            } else {
-                toast = String(localized: "重写失败，稍后再试")
-            }
-            restyling = false
+            preview = []
+            // 收尾有两条路（谁先到谁收）：HTTP 响应，或 WS 的 preview-done。
+            // 长文生成可能超过 HTTP 超时——preview-done 保证断线也能正常收尾。
+            let head = await store.restyle(recording, styleV: v)
+            await finishRestyle(success: head != nil)
         }
+    }
+
+    /// 重写收尾（幂等，HTTP 与 preview-done 谁先到谁执行，后到的空跑）。
+    private func finishRestyle(success: Bool) async {
+        guard restyling else { return }
+        restyling = false
+        if success {
+            doc = await store.fetchDoc(recording)
+            followup.load(doc)   // 重挖带来新一轮追问，整组换掉
+            articleIndex = 0
+            await loadVersionHistory()
+        } else {
+            toast = String(localized: "重写失败，稍后再试")
+        }
+        preview = []
     }
 
     private var restylingOverlay: some View {
         ZStack {
             Color.black.opacity(0.12).ignoresSafeArea()
-            VStack(spacing: 12) {
-                ProgressView().tint(Theme.accent)
-                Text("正在用新风格重写…").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.ink)
+            if preview.isEmpty {
+                // 还没吐出正文（或走了无增量的中转路径）：老的转圈卡片兜底。
+                VStack(spacing: 12) {
+                    ProgressView().tint(Theme.accent)
+                    Text("正在用新风格重写…").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.ink)
+                }
+                .padding(.horizontal, 26).padding(.vertical, 22)
+                .background(Theme.card, in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.borderChrome, lineWidth: 1))
+            } else {
+                // 幽灵稿：新风格的正文边生成边长出来，跟着尾部滚动。
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            ForEach(preview.indices, id: \.self) { i in
+                                VStack(alignment: .leading, spacing: 10) {
+                                    if !preview[i].title.isEmpty {
+                                        Text(preview[i].title)
+                                            .font(.system(size: 20, weight: .semibold)).foregroundStyle(Theme.inkRead)
+                                    }
+                                    if !preview[i].body.isEmpty {
+                                        Text(preview[i].body)
+                                            .font(.system(size: 15)).foregroundStyle(Theme.bodyRead).lineSpacing(7)
+                                    }
+                                }
+                            }
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small).tint(Theme.accent)
+                                Text("正在用新风格重写…").font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
+                            }
+                            .id("previewEnd")
+                        }
+                        .padding(20)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .onChange(of: preview.last?.body.count ?? 0) { _, _ in
+                        withAnimation(.linear(duration: 0.15)) { proxy.scrollTo("previewEnd", anchor: .bottom) }
+                    }
+                }
+                .frame(maxHeight: 480)
+                .background(Theme.card, in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.borderChrome, lineWidth: 1))
+                .padding(.horizontal, 18).padding(.vertical, 60)
             }
-            .padding(.horizontal, 26).padding(.vertical, 22)
-            .background(Theme.card, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.borderChrome, lineWidth: 1))
         }
     }
 
@@ -305,6 +354,20 @@ struct RecordingDetailView: View {
             // The reply stays on screen until it's replaced by a newer one or the
             // user taps elsewhere on the page — no auto-dismiss timer.
             agentReply = AgentReply(text: text, ok: ok)
+        }
+        // 重写实时预览：服务端边生成边推（已按 ~250ms 合批），按文章下标拼接。
+        agent.onPreview = { [self] deltas in
+            guard restyling else { return }   // 不在重写中收到的残留增量：忽略
+            for d in deltas {
+                while preview.count <= d.a { preview.append((title: "", body: "")) }
+                if d.field == "title" { preview[d.a].title += d.text }
+                else { preview[d.a].body += d.text }
+            }
+        }
+        agent.onPreviewReset = { [self] in preview = [] }
+        agent.onPreviewDone = { [self] ok in
+            // HTTP 响应可能比这个晚（长文生成超时）——谁先到谁收尾，幂等。
+            Task { await finishRestyle(success: ok) }
         }
         followup.patch = { [self] id, status in
             Task { await store.patchQuestion(recording, id: id, status: status) }
