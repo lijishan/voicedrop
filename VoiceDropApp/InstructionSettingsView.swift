@@ -297,7 +297,7 @@ struct InstructionEditView: View {
         }
         .background(Theme.appBG.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .sheet(item: $sharePayload) { ShareSheet(items: [$0.message]) }
+        .sheet(item: $sharePayload) { ShareSheet(items: [$0.url]) }
         .onAppear {
             draft = item?.override ?? ""
             nameDraft = item?.customLabel ?? ""
@@ -383,12 +383,11 @@ struct InstructionEditView: View {
     }
 }
 
-/// 系统分享 sheet 的载荷：一段带码 + 链接的现成文案。
+/// 系统分享 sheet 的载荷：直接分享落地页 URL——纯文本文案微信收不了（分享面板里
+/// 点微信没反应），URL 会落成可点的链接；落地页本身已把「码 + 怎么用 + 下载」讲清楚。
 private struct ShareCodePayload: Identifiable {
     let code: String
     let label: String
     var id: String { code }
-    var message: String {
-        String(localized: "我在 VoiceDrop 调了一条提示词「\(label)」。打开 VoiceDrop，对 AI 说「用 \(code)」就能直接用。看看内容：\(API.sharePage(code).absoluteString)")
-    }
+    var url: URL { API.sharePage(code) }
 }
