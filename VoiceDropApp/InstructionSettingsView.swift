@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import Observation
 
-// 设置 → AI 指令：逐条自定义长按菜单背后的指令（图片风格 / 改写 / 公众号题图…）。
+// 设置 → 提示词：逐条自定义长按菜单背后的指令（图片风格 / 改写 / 公众号题图…）。
 // 服务端真源 GET/PUT /agent/ui-config/custom（users/<sub>/ui-config.json 稀疏覆盖）：
 // 指令/名称留空 = 用缺省值（内置 ← 全局调优版）；「在菜单中隐藏」把该条从长按菜单
 // 里拿掉（可随时恢复）。保存后刷新 UIConfigStore，长按菜单立即生效。
@@ -116,14 +116,14 @@ struct InstructionSettingsView: View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
                 NavSquare(systemName: "chevron.left", size: 36) { dismiss() }
-                Text("AI 指令").font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.ink)
+                Text("提示词").font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.ink)
                 Spacer()
             }
             .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 6)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("长按菜单里每个动作的名字和指令都可以改成你自己的说法。留空即恢复默认；不想要的可以从菜单里隐藏。")
+                    Text("长按菜单里每个动作的名字和提示词都可以改成你自己的说法。留空即恢复默认；不想要的可以从菜单里隐藏。")
                         .font(.system(size: 13)).foregroundStyle(Theme.secondary)
                         .padding(.horizontal, 4).padding(.bottom, 2)
 
@@ -207,7 +207,7 @@ struct InstructionEditView: View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
                 NavSquare(systemName: "chevron.left", size: 36) { dismiss() }
-                Text(item?.label ?? String(localized: "指令")).font(.system(size: 20, weight: .semibold))
+                Text(item?.label ?? String(localized: "提示词")).font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Theme.ink).lineLimit(1)
                 Spacer()
                 Button {
@@ -243,7 +243,7 @@ struct InstructionEditView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("我的指令").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.secondary)
+                        Text("我的提示词").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.secondary)
                         TextEditor(text: $draft)
                             .font(.system(size: 15)).foregroundStyle(Theme.ink)
                             .scrollContentBackground(.hidden)
@@ -252,7 +252,7 @@ struct InstructionEditView: View {
                             .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
                             .focused($editorFocused)
                         HStack {
-                            Text("留空 = 使用默认指令").font(.system(size: 12)).foregroundStyle(Theme.faint)
+                            Text("留空 = 使用默认提示词").font(.system(size: 12)).foregroundStyle(Theme.faint)
                             Spacer()
                             if !draft.isEmpty || !nameDraft.isEmpty {
                                 Button {
@@ -278,7 +278,7 @@ struct InstructionEditView: View {
                     shareCard
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("默认指令").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.secondary)
+                        Text("默认提示词").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.secondary)
                         Text(item?.defaultText ?? "")
                             .font(.system(size: 14)).foregroundStyle(Theme.secondary)
                             .lineSpacing(5)
@@ -287,7 +287,7 @@ struct InstructionEditView: View {
                             .padding(12)
                             .background(Theme.tileNeutral.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
                         if draft.isEmpty {
-                            Text("当前生效的就是默认指令。想微调可以长按上方文本框，把默认指令粘贴进去再改。")
+                            Text("当前生效的就是默认提示词。想微调可以长按上方文本框，把默认提示词粘贴进去再改。")
                                 .font(.system(size: 12)).foregroundStyle(Theme.faint)
                         }
                     }
@@ -312,9 +312,9 @@ struct InstructionEditView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("分享这条指令").font(.system(size: 15)).foregroundStyle(Theme.ink)
+                    Text("分享这条提示词").font(.system(size: 15)).foregroundStyle(Theme.ink)
                     Text(sharing ? "分享中，关闭后分享码立即失效"
-                                 : "开启后，任何人对 VoiceDrop 说出分享码，或打开链接，就能看到并一次性使用这条指令")
+                                 : "开启后，任何人对 VoiceDrop 说出分享码，或打开链接，就能看到并一次性使用这条提示词")
                         .font(.system(size: 12)).foregroundStyle(Theme.faint)
                 }
                 Spacer()
@@ -389,6 +389,6 @@ private struct ShareCodePayload: Identifiable {
     let label: String
     var id: String { code }
     var message: String {
-        String(localized: "我在 VoiceDrop 调了一条 AI 指令「\(label)」。打开 VoiceDrop，对 AI 说「用 \(code)」就能直接用。看看内容：\(API.sharePage(code).absoluteString)")
+        String(localized: "我在 VoiceDrop 调了一条提示词「\(label)」。打开 VoiceDrop，对 AI 说「用 \(code)」就能直接用。看看内容：\(API.sharePage(code).absoluteString)")
     }
 }

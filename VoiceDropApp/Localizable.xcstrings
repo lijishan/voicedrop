@@ -161,16 +161,6 @@
         }
       }
     },
-    "AI 指令": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AI instructions"
-          }
-        }
-      }
-    },
     "AI 连接中…": {
       "localizations": {
         "en": {
@@ -1669,12 +1659,12 @@
         }
       }
     },
-    "当前生效的就是默认指令。想微调可以长按上方文本框，把默认指令粘贴进去再改。": {
+    "当前生效的就是默认提示词。想微调可以长按上方文本框，把默认提示词粘贴进去再改。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The default instructions are what's in effect now. To tweak them, long-press the text box above, paste in the default instructions, and edit."
+            "value": "The default prompt is what's in effect now. To tweak it, long-press the text box above, paste in the default prompt, and edit."
           }
         }
       }
@@ -1839,12 +1829,12 @@
         }
       }
     },
-    "我的指令": {
+    "我的提示词": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "My instructions"
+            "value": "My prompt"
           }
         }
       }
@@ -1929,16 +1919,6 @@
         }
       }
     },
-    "指令": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Instructions"
-          }
-        }
-      }
-    },
     "按住 说话 修改": {
       "localizations": {
         "en": {
@@ -2015,6 +1995,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Push failed. Please try again later"
+          }
+        }
+      }
+    },
+    "提示词": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prompt"
           }
         }
       }
@@ -2649,12 +2639,12 @@
         }
       }
     },
-    "留空 = 使用默认指令": {
+    "留空 = 使用默认提示词": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Leave blank = use default instructions"
+            "value": "Leave blank = use default prompt"
           }
         }
       }
@@ -3567,12 +3557,12 @@
         }
       }
     },
-    "长按菜单里每个动作的名字和指令都可以改成你自己的说法。留空即恢复默认；不想要的可以从菜单里隐藏。": {
+    "长按菜单里每个动作的名字和提示词都可以改成你自己的说法。留空即恢复默认；不想要的可以从菜单里隐藏。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "You can rename each action in the long-press menu and rewrite its instruction in your own words. Leave a field blank to restore the default; hide the ones you don't want from the menu."
+            "value": "You can rename each action in the long-press menu and rewrite its prompt in your own words. Leave a field blank to restore the default; hide the ones you don't want from the menu."
           }
         }
       }
@@ -3697,12 +3687,12 @@
         }
       }
     },
-    "默认指令": {
+    "默认提示词": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Default instruction"
+            "value": "Default prompt"
           }
         }
       }
