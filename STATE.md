@@ -2,6 +2,28 @@
 
 Last updated: 2026-07-12（服务端已部署）
 
+## 性能改造（2026-07-12，性能审计后落地）
+
+三处结构性提速（jianshuo.dev repo 两处 + 本 repo 一处），审计结论：瓶颈在服务端，iOS 端整体健康。
+
+- **Miner 按用户分片**（`agent/src/index.js` + `miner.js`）：上传/用户触发 →
+  `idFromName("miner:<scope>")`，每个分片只 list 自己用户的前缀、只挖自己的录音——
+  一个用户的长录音不再阻塞其他所有人；10s resume pass 不再全量扫桶。原单例
+  `"miner"` 降级为 sweep 调度器（6h cron/admin 手动）：整桶 list 一次、把有活的
+  scope 踢给对应分片，自己绝不挖矿（sweep 与分片因此不可能双挖同一条录音）。
+  ops 错误计数照旧在单例。测试 `mine-sharding.test.js`。
+- **GET /articles 列表摘要索引**（`functions/files/api/[[path]].js`）：per-user
+  `users/<sub>/articles-index.json`，稳态 = prefix list + 1 次索引读，不再每篇
+  整档 GET（schema-3 信封含 10 版正文+全文转写，此前只为取标题全读）。索引是
+  **自愈缓存、只由该路由维护**：R2 listing 为准，etag 变了才重读该篇，删除自动
+  剪除，坏了整体重建；所有写入方零改动。**transcript 保留在文章 doc 里（用户
+  拍板不拆）**。注意 iOS 列表刷新走的是 `GET /list`（纯元数据），此索引主要提速
+  网页文章列表/admin。测试 `articles-index-cache.test.js`。
+- **iOS 详情页正文解析缓存**（`RecordingDetailView.swift` BodyParseCache）：
+  bodyRows 的正则分段 + 每段 AttributedString(markdown:) 曾在每次重绘（按住说话
+  开/关、高亮淡出）整篇重跑；现按 (body, photos) memoize，重绘 = 字典命中。
+  引用类型 @State，body 求值中改内容不触发失效循环。
+
 ## ⚠️ 实时预览 UI 已撤销（2026-07-12 晚，用户拍板）——但服务端流式基建保留
 
 正文内打字机（行级替换/插入 + 整篇幽灵稿）在真机上引入多个难预料的布局 bug，

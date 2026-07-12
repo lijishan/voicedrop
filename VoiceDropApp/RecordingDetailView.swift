@@ -715,6 +715,21 @@ struct RecordingDetailView: View {
         }
     }
 
+    /// Parse cache for the body render path. `bodyRows` and `textAttributed` are
+    /// pure functions of (body, photos), but SwiftUI re-evaluates `body` — and with
+    /// it every visible paragraph — each time 按住说话 starts/stops or an edit
+    /// highlight fades, so a long article used to re-run the segment regex plus a
+    /// full markdown parse PER PARAGRAPH on the main thread on every re-render.
+    /// A reference-type cache keyed by content turns those re-renders into
+    /// dictionary hits. Mutating it during body evaluation is safe: the class
+    /// reference itself never changes, so no view invalidation is triggered.
+    private final class BodyParseCache {
+        var rowsKey = ""
+        var rows: [BodyRow] = []
+        var attributed: [String: AttributedString] = [:]
+    }
+    @State private var parseCache = BodyParseCache()
+
     /// Flatten the body (text + `[[photo:…]]` markers) into a numbered row list.
     /// EVERY row — paragraph OR image — consumes one slot of a single continuous
     /// 第N行 counter (counted by real line breaks; a photo marker is its own line),
@@ -723,6 +738,8 @@ struct RecordingDetailView: View {
     /// 图M number (M-th photo). Photos with no marker in the body are not shown.
     private func bodyRows(_ a: MinedArticle) -> [BodyRow] {
         let photos = doc?.photos ?? []
+        let cacheKey = a.body + "\u{0}" + photos.joined(separator: ",")
+        if parseCache.rowsKey == cacheKey { return parseCache.rows }
         let segments = ArticleBody.segments(a.body)
         var rows: [BodyRow] = []
         var lineNo = 0, imgNo = 0
@@ -742,6 +759,11 @@ struct RecordingDetailView: View {
                 }
             }
         }
+        parseCache.rowsKey = cacheKey
+        parseCache.rows = rows
+        // Paragraph texts mostly survive an edit, so the attributed cache is kept
+        // across body changes — just bounded so切换文章/多次重写不会无限增长。
+        if parseCache.attributed.count > 400 { parseCache.attributed.removeAll(keepingCapacity: true) }
         return rows
     }
 
@@ -847,9 +869,12 @@ struct RecordingDetailView: View {
     }
 
     private func textAttributed(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(
+        if let cached = parseCache.attributed[s] { return cached }
+        let parsed = (try? AttributedString(markdown: s, options: .init(
             interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(s)
+        parseCache.attributed[s] = parsed
+        return parsed
     }
 
     private var chipRow: some View {
