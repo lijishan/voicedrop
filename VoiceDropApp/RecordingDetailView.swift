@@ -53,7 +53,8 @@ struct RecordingDetailView: View {
     @State private var showRestyle = false       // 换风格重写 sheet
     @State private var restyling = false         // /agent/restyle in flight
     @State private var preview: [(title: String, body: String)] = []   // 重写实时预览（幽灵稿），按文章下标累积
-    @State private var editPreview: (label: String, text: String)? = nil   // 行级语音编辑打字机卡片
+    @State private var liveEdits: [Int: (op: String, text: String)] = [:]   // 行级语音编辑：行号 → 正文内打字
+    @State private var liveTitle: String? = nil                              // set_title 的流式新标题
     @State private var lpMenu: LongpressPresentation?   // 长按操作菜单（自绘覆盖层）
 
     // Undo/redo: versions (oldest-first) + head loaded on open and refreshed after
@@ -193,28 +194,6 @@ struct RecordingDetailView: View {
         }
     }
 
-    /// 行级语音编辑的打字机卡片：目标行标签 + 边生成边长的新文本（带光标）。
-    /// 停在底部（说话条上方），回合结束（updated/reply）自动消失。
-    private func typewriterCard(_ ep: (label: String, text: String)) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.mini).tint(Theme.accent)
-                Text(ep.label).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary)
-            }
-            Text(ep.text + "▍")
-                .font(.system(size: 14)).foregroundStyle(Theme.ink).lineSpacing(5)
-                .lineLimit(4, reservesSpace: false)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 14).padding(.vertical, 11)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.borderChrome, lineWidth: 1))
-        .shadow(color: .black.opacity(0.08), radius: 10, y: 3)
-        .padding(.horizontal, 16).padding(.bottom, 88)   // 说话条上方
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-        .animation(.easeOut(duration: 0.2), value: ep.label)
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             navBar
@@ -235,7 +214,6 @@ struct RecordingDetailView: View {
             if !articles.isEmpty { bottomBar }
         }
         .overlay(alignment: .bottom) { toastView }
-        .overlay(alignment: .bottom) { if let ep = editPreview { typewriterCard(ep) } }
         .overlay { if restyling || !preview.isEmpty { restylingOverlay } }
         .overlay {
             if let m = lpMenu {
@@ -365,7 +343,7 @@ struct RecordingDetailView: View {
         guard !connected, !articles.isEmpty else { return }
         connected = true
         agent.onUpdate = { [self] newDoc, _ in
-            editPreview = nil                 // 回合结束：打字机卡片让位给真实变更闪光
+            liveEdits = [:]; liveTitle = nil  // 回合结束：正文内打字让位给真实变更闪光
             if !restyling { preview = [] }    // 语音整篇改写的幽灵稿也收场
             guard let newDoc else { return }
             let oldArticles = articles
@@ -377,7 +355,7 @@ struct RecordingDetailView: View {
             Task { await loadVersionHistory() }
         }
         agent.onReply = { [self] text, ok in
-            editPreview = nil
+            liveEdits = [:]; liveTitle = nil
             // The reply stays on screen until it's replaced by a newer one or the
             // user taps elsewhere on the page — no auto-dismiss timer.
             agentReply = AgentReply(text: text, ok: ok)
@@ -399,18 +377,19 @@ struct RecordingDetailView: View {
                 preview = []   // 语音改写：真实结果由紧随其后的 updated 呈现
             }
         }
-        // 行级语音编辑的打字机：目标行 + 新文本边生成边显示在底部卡片。
+        // 行级语音编辑：新文本直接打进正文——改写行原地替换、插入行原地长出。
+        // 行号 = bodyRows() 的第N行（与服务端 linenum.js 严格镜像）。
         agent.onEditPreview = { [self] deltas in
             for d in deltas {
-                let label: String
                 switch d.op {
-                case "replace_line": label = String(localized: "第 \(d.line ?? 0) 行 · 改写中")
-                case "insert_after": label = d.line == 0 ? String(localized: "开头 · 插入中") : String(localized: "第 \(d.line ?? 0) 行后 · 插入中")
-                case "set_title": label = String(localized: "标题 · 改写中")
-                default: continue
+                case "replace_line", "insert_after":
+                    let line = d.line ?? 0
+                    if liveEdits[line]?.op != d.op { liveEdits[line] = (op: d.op, text: "") }
+                    liveEdits[line]?.text += d.text
+                case "set_title":
+                    liveTitle = (liveTitle ?? "") + d.text
+                default: break
                 }
-                if editPreview?.label != label { editPreview = (label: label, text: "") }
-                editPreview?.text += d.text
             }
         }
         followup.patch = { [self] id, status in
@@ -758,7 +737,7 @@ struct RecordingDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if let a = articles[safe: articleIndex] {
-                    Text(a.title)
+                    Text(liveTitle.map { $0 + "▍" } ?? a.title)
                         .font(.system(size: 23, weight: .semibold)).foregroundStyle(Theme.inkRead)
                         .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 14)
@@ -840,15 +819,30 @@ struct RecordingDetailView: View {
     /// Body rows with locators (line numbers + 图N badges) that float in the left
     /// margin / image corner. They're absolutely positioned (overlay) so the text
     /// never reflows — they only fade in while the user holds to talk.
+    /// 正文内打字：正在被语音编辑改写/插入的行（荧光底 + 光标，边生成边长）。
+    private func liveTypingRow(_ text: String) -> some View {
+        Text(text + "▍")
+            .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
+            .lineSpacing(9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.fuHighlight, in: RoundedRectangle(cornerRadius: 4))
+    }
+
     @ViewBuilder
     private func articleBody(_ a: MinedArticle) -> some View {
         let editing = dictation.isRecording
         // ~22pt between rows restores the blank-line gap paragraphs had before they
         // were split into numbered rows (previously a `\n\n` break inside one Text).
         VStack(alignment: .leading, spacing: 22) {
+            // 「插到正文最前面」(insert_after 0) 的正文内打字
+            if let ins = liveEdits[0], ins.op == "insert_after" { liveTypingRow(ins.text) }
             ForEach(bodyRows(a)) { row in
                 switch row {
                 case .paragraph(let n, let text):
+                    if let le = liveEdits[n], le.op == "replace_line" {
+                        // 这一行正被语音编辑改写：原文让位，新文本原地打出来。
+                        liveTypingRow(le.text)
+                    } else {
                     // 长按出操作菜单（自绘覆盖层）——为此取消了 .textSelection（长按
                     // 选择与菜单手势冲突），菜单尾部的本地「拷贝」项补偿。
                     Text(textAttributed(text))
@@ -867,11 +861,15 @@ struct RecordingDetailView: View {
                             }
                         }
                         .overlay(alignment: .topLeading) { lineNumber(n, visible: editing) }
+                    }
+                    // 在这一行后面插入的新段落：原地长出。
+                    if let ins = liveEdits[n], ins.op == "insert_after" { liveTypingRow(ins.text) }
                 case .image(let n, let m, let key):
                     PhotoTile(store: store, relKey: key,
                               onLongPress: { img, frame in presentImageMenu(img, relKey: key, frame: frame) })
                         .overlay(alignment: .topLeading) { lineNumber(n, visible: editing) }
                         .overlay(alignment: .topLeading) { imageBadge(m, visible: editing) }
+                    if let ins = liveEdits[n], ins.op == "insert_after" { liveTypingRow(ins.text) }
                 }
             }
         }
