@@ -106,6 +106,8 @@ https://developers.openai.com/api/docs/guides/realtime-models-prompting ：
   安静结束；relay 和 app 都不处理这个调用（app 未知事件走 default:break，最多闭麦约 1 秒，
   有 15s watchdog 兜底）。
 - 补：语言钉死始终中文（夹英文单词不切换）、听不清只澄清不脑补、反重复句式。
+- **同日用户拍板问题方向：问宏观不问细节**——为什么重要/背后逻辑/更大趋势/判断立场，
+  明确禁止追问数字、时间地点、具体场景（第一版写的「往细处挖」被否）。测试锁了方向。
 - 测试锁行为：realtime-route.test.js 断言分节标题在、wait_for_user 在工具表里、计时/冷场
   措辞不在。全量 795 用例绿，wrangler 已部署，线上 relay 路由 426 验证过。
 - **待真机实测**：wait_for_user 会不会被过度调用（该提问时也装哑）——若是，收紧工具
