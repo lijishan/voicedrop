@@ -52,9 +52,6 @@ struct RecordingDetailView: View {
     @State private var showingInsertPhoto = false
     @State private var showRestyle = false       // 换风格重写 sheet
     @State private var restyling = false         // /agent/restyle in flight
-    @State private var preview: [(title: String, body: String)] = []   // 重写实时预览（幽灵稿），按文章下标累积
-    @State private var liveEdits: [Int: (op: String, text: String)] = [:]   // 行级语音编辑：行号 → 正文内打字
-    @State private var liveTitle: String? = nil                              // set_title 的流式新标题
     @State private var lpMenu: LongpressPresentation?   // 长按操作菜单（自绘覆盖层）
 
     // Undo/redo: versions (oldest-first) + head loaded on open and refreshed after
@@ -121,7 +118,6 @@ struct RecordingDetailView: View {
         }
         Task {
             restyling = true
-            preview = []
             // 收尾有两条路（谁先到谁收）：HTTP 响应，或 WS 的 preview-done。
             // 长文生成可能超过 HTTP 超时——preview-done 保证断线也能正常收尾。
             let head = await store.restyle(recording, styleV: v)
@@ -141,10 +137,8 @@ struct RecordingDetailView: View {
         } else {
             toast = String(localized: "重写失败，稍后再试")
         }
-        preview = []
     }
 
-    /// 只在生成尚未吐字时兜底的转圈卡片（吐字后正文原地打字，见 articlePane）。
     private var restylingOverlay: some View {
         ZStack {
             Color.black.opacity(0.12).ignoresSafeArea()
@@ -156,39 +150,6 @@ struct RecordingDetailView: View {
             .background(Theme.card, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.borderChrome, lineWidth: 1))
         }
-    }
-
-    /// 整篇重写（换风格 / 语音 write_article）的正文内打字：新稿以正式排版在
-    /// 阅读区流式长出。photo 标记不显示（预览期先滤掉，成稿由真实版本渲染）。
-    private func livePreviewContent() -> some View {
-        VStack(alignment: .leading, spacing: 22) {
-            ForEach(preview.indices, id: \.self) { i in
-                let isTail = i == preview.count - 1
-                if !preview[i].title.isEmpty || isTail {
-                    Text(preview[i].title + (isTail && preview[i].body.isEmpty ? "▍" : ""))
-                        .font(.system(size: 23, weight: .semibold)).foregroundStyle(Theme.inkRead)
-                        .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, i == 0 ? 14 : 18)
-                }
-                let body = Self.previewDisplayBody(preview[i].body)
-                if !body.isEmpty {
-                    Text(body + (isTail ? "▍" : ""))
-                        .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
-                        .lineSpacing(9)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            Color.clear.frame(height: 1).id("livePreviewEnd")
-        }
-    }
-
-    /// 预览期的正文显示：去掉完整的 [[photo:…]] 标记，并截掉结尾未写完的半个标记。
-    static func previewDisplayBody(_ s: String) -> String {
-        var out = s.replacingOccurrences(of: #"\[\[photo:[^\]]*\]\]"#, with: "", options: .regularExpression)
-        if let r = out.range(of: "[[", options: .backwards), !out[r.lowerBound...].contains("]]") {
-            out = String(out[..<r.lowerBound])
-        }
-        return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var body: some View {
@@ -211,7 +172,7 @@ struct RecordingDetailView: View {
             if !articles.isEmpty { bottomBar }
         }
         .overlay(alignment: .bottom) { toastView }
-        .overlay { if restyling && preview.isEmpty { restylingOverlay } }   // 吐字前转圈；吐字后正文原地打字
+        .overlay { if restyling { restylingOverlay } }
         .overlay {
             if let m = lpMenu {
                 LongpressMenuOverlay(model: m) {
@@ -340,8 +301,6 @@ struct RecordingDetailView: View {
         guard !connected, !articles.isEmpty else { return }
         connected = true
         agent.onUpdate = { [self] newDoc, _ in
-            liveEdits = [:]; liveTitle = nil  // 回合结束：正文内打字让位给真实变更闪光
-            if !restyling { preview = [] }    // 语音整篇改写的幽灵稿也收场
             guard let newDoc else { return }
             let oldArticles = articles
             doc = newDoc
@@ -351,43 +310,16 @@ struct RecordingDetailView: View {
             // A new agent edit writes a new version; refresh history and reset to latest.
             Task { await loadVersionHistory() }
         }
-        agent.onReply = { [self] text, ok in
-            liveEdits = [:]; liveTitle = nil
+        agent.onReply = { text, ok in
             // The reply stays on screen until it's replaced by a newer one or the
             // user taps elsewhere on the page — no auto-dismiss timer.
             agentReply = AgentReply(text: text, ok: ok)
         }
-        // 实时预览（幽灵稿）：换风格 restyle 和语音整篇改写（write_article）共用。
-        agent.onPreview = { [self] deltas in
-            for d in deltas {
-                while preview.count <= d.a { preview.append((title: "", body: "")) }
-                if d.field == "title" { preview[d.a].title += d.text }
-                else { preview[d.a].body += d.text }
-            }
-        }
-        agent.onPreviewReset = { [self] in preview = [] }
+        // 流式预览的 UI 已撤（打字机在正文里渲染引入了难排查的布局 bug，用户拍板
+        // 回退「一次性出结果」）；只保留 preview-done 这个完成信号——长文重写的
+        // 生成可能超过 HTTP 超时，它保证断线也能正常收尾。其余预览消息被忽略。
         agent.onPreviewDone = { [self] ok in
-            if restyling {
-                // HTTP 响应可能比这个晚（长文生成超时）——谁先到谁收尾，幂等。
-                Task { await finishRestyle(success: ok) }
-            } else {
-                preview = []   // 语音改写：真实结果由紧随其后的 updated 呈现
-            }
-        }
-        // 行级语音编辑：新文本直接打进正文——改写行原地替换、插入行原地长出。
-        // 行号 = bodyRows() 的第N行（与服务端 linenum.js 严格镜像）。
-        agent.onEditPreview = { [self] deltas in
-            for d in deltas {
-                switch d.op {
-                case "replace_line", "insert_after":
-                    let line = d.line ?? 0
-                    if liveEdits[line]?.op != d.op { liveEdits[line] = (op: d.op, text: "") }
-                    liveEdits[line]?.text += d.text
-                case "set_title":
-                    liveTitle = (liveTitle ?? "") + d.text
-                default: break
-                }
-            }
+            Task { await finishRestyle(success: ok) }
         }
         followup.patch = { [self] id, status in
             Task { await store.patchQuestion(recording, id: id, status: status) }
@@ -731,14 +663,10 @@ struct RecordingDetailView: View {
 
     private var articlePane: some View {
         // 整条播放条已收进顶部播放键，正文直接上移、阅读区更大。
-        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                if !preview.isEmpty {
-                    // 整篇重写进行中：新稿以正式排版在阅读区原地打出（老稿让位）。
-                    livePreviewContent()
-                } else if let a = articles[safe: articleIndex] {
-                    Text(liveTitle.map { $0 + "▍" } ?? a.title)
+                if let a = articles[safe: articleIndex] {
+                    Text(a.title)
                         .font(.system(size: 23, weight: .semibold)).foregroundStyle(Theme.inkRead)
                         .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 14)
@@ -760,11 +688,6 @@ struct RecordingDetailView: View {
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 8)
-        }
-        .onChange(of: preview.last.map { $0.title.count + $0.body.count } ?? 0) { _, c in
-            guard c > 0 else { return }
-            withAnimation(.linear(duration: 0.15)) { proxy.scrollTo("livePreviewEnd", anchor: .bottom) }
-        }
         }
         .contentMargins(.bottom, 96, for: .scrollContent)   // clear the floating pill
         // Tapping anywhere on the article body dismisses a lingering agent reply.
@@ -825,30 +748,15 @@ struct RecordingDetailView: View {
     /// Body rows with locators (line numbers + 图N badges) that float in the left
     /// margin / image corner. They're absolutely positioned (overlay) so the text
     /// never reflows — they only fade in while the user holds to talk.
-    /// 正文内打字：正在被语音编辑改写/插入的行（荧光底 + 光标，边生成边长）。
-    private func liveTypingRow(_ text: String) -> some View {
-        Text(text + "▍")
-            .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
-            .lineSpacing(9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.fuHighlight, in: RoundedRectangle(cornerRadius: 4))
-    }
-
     @ViewBuilder
     private func articleBody(_ a: MinedArticle) -> some View {
         let editing = dictation.isRecording
         // ~22pt between rows restores the blank-line gap paragraphs had before they
         // were split into numbered rows (previously a `\n\n` break inside one Text).
         VStack(alignment: .leading, spacing: 22) {
-            // 「插到正文最前面」(insert_after 0) 的正文内打字
-            if let ins = liveEdits[0], ins.op == "insert_after" { liveTypingRow(ins.text) }
             ForEach(bodyRows(a)) { row in
                 switch row {
                 case .paragraph(let n, let text):
-                    if let le = liveEdits[n], le.op == "replace_line" {
-                        // 这一行正被语音编辑改写：原文让位，新文本原地打出来。
-                        liveTypingRow(le.text)
-                    } else {
                     // 长按出操作菜单（自绘覆盖层）——为此取消了 .textSelection（长按
                     // 选择与菜单手势冲突），菜单尾部的本地「拷贝」项补偿。
                     Text(textAttributed(text))
@@ -867,15 +775,11 @@ struct RecordingDetailView: View {
                             }
                         }
                         .overlay(alignment: .topLeading) { lineNumber(n, visible: editing) }
-                    }
-                    // 在这一行后面插入的新段落：原地长出。
-                    if let ins = liveEdits[n], ins.op == "insert_after" { liveTypingRow(ins.text) }
                 case .image(let n, let m, let key):
                     PhotoTile(store: store, relKey: key,
                               onLongPress: { img, frame in presentImageMenu(img, relKey: key, frame: frame) })
                         .overlay(alignment: .topLeading) { lineNumber(n, visible: editing) }
                         .overlay(alignment: .topLeading) { imageBadge(m, visible: editing) }
-                    if let ins = liveEdits[n], ins.op == "insert_after" { liveTypingRow(ins.text) }
                 }
             }
         }
