@@ -14,7 +14,7 @@ struct PromptError: Error, Equatable {
 
 /// 服务端 resolved 节点（`GET /agent/prompts` 的 items 数组元素）。
 /// 未知字段（如 `imageParams`）不声明 = Codable 自动忽略，不炸解码。
-struct PromptNode: Codable, Identifiable, Equatable {
+struct PromptNode: Codable, Identifiable, Equatable, Hashable {
     var id: String
     var type: String            // "action" | "group"
     var label: String
@@ -109,6 +109,28 @@ enum PromptLogic {
             }
         }
         return (items, nil)
+    }
+
+    /// 原位替换：找到 id 对应节点（顶层或组内子项）换成 `newNode`，位置不变——`newNode.id`
+    /// 可以和原 id 不同（fork 换新 p_ id 时就是这样）。找不到该 id → 原数组原样返回。
+    /// 与 `removing` 对称，同样是零索引状态的纯函数，供 `PromptStore.replace` 做
+    /// 快照/保存/失败回滚（不用自己记 (topIndex, childIndex)）。
+    static func replacing(_ items: [PromptNode], id: String, with newNode: PromptNode) -> [PromptNode] {
+        if let i = items.firstIndex(where: { $0.id == id }) {
+            var copy = items
+            copy[i] = newNode
+            return copy
+        }
+        for (gi, group) in items.enumerated() where group.type == "group" {
+            if let ci = group.children?.firstIndex(where: { $0.id == id }) {
+                var copy = items
+                var children = copy[gi].children ?? []
+                children[ci] = newNode
+                copy[gi].children = children
+                return copy
+            }
+        }
+        return items
     }
 
     /// 5b 过滤：action 按 appliesTo 命中锚点；group 保留命中的子项，全不命中则整组消失。
@@ -445,6 +467,40 @@ final class PromptStore {
         let snapshot = items
         isMutating = true
         items = newItems
+        let err = await save()
+        isMutating = false
+        if let err {
+            items = snapshot
+            return err
+        }
+        return nil
+    }
+
+    /// 新建（3c）：把节点追加到列表末尾再整树 PUT；失败恢复追加前的快照。与 `delete`
+    /// 同一套快照/`isMutating`纪律（见 `delete` 上的长注释）。nil = 成功；非 nil = 错误文案。
+    func add(_ node: PromptNode) async -> String? {
+        guard !isMutating else { return nil }
+        let snapshot = items
+        isMutating = true
+        items.append(node)
+        let err = await save()
+        isMutating = false
+        if let err {
+            items = snapshot
+            return err
+        }
+        return nil
+    }
+
+    /// fork-on-edit（5c 核心）+ 系统 group 改名同款 fork：原位替换 id 对应节点（`newNode.id`
+    /// 可以和 id 不同——fork 换新 p_ id 时就是这样），整树 PUT；失败恢复替换前的快照。
+    /// custom/user 直接编辑也走这条（`newNode.id == id`，等于原位改字段）。同一套
+    /// 快照/`isMutating` 纪律（见 `delete` 上的长注释）。nil = 成功；非 nil = 错误文案。
+    func replace(id: String, with newNode: PromptNode) async -> String? {
+        guard !isMutating else { return nil }
+        let snapshot = items
+        isMutating = true
+        items = PromptLogic.replacing(items, id: id, with: newNode)
         let err = await save()
         isMutating = false
         if let err {

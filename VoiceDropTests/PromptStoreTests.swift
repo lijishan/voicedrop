@@ -168,6 +168,80 @@ final class PromptStoreTests: XCTestCase {
         XCTAssertNotEqual(a.id, b.id)
     }
 
+    // Task 5：PromptEditView 保存语义的核心——dirty 后保存 = 先把编辑后的字段套进节点副本
+    // （id 仍是原系统 id），再喂给 fork。这里直接模拟那一步：fork 的输入已经是编辑后的值，
+    // 断言产物携带的是**编辑后**的字段，不是原始值，同时 forkedFrom 仍指向原始系统 id。
+    func testForkWithEditsAppliesEditedFieldsAndPreservesForkedFrom() {
+        let original = PromptNode(id: "sys_concise", type: "action", label: "更简洁", origin: "system",
+                                   prompt: "把这段改简洁", appliesTo: ["text"], kind: "rewrite")
+        var edited = original
+        edited.label = "更简洁一点"
+        edited.prompt = "把这段改得更简洁"
+        edited.appliesTo = ["text", "image"]
+
+        let forked = PromptLogic.fork(edited)
+        XCTAssertNotNil(forked.id.range(of: "^p_[a-z0-9]{8}$", options: .regularExpression), "id was \(forked.id)")
+        XCTAssertEqual(forked.forkedFrom, "sys_concise", "forkedFrom must point at the original system id, not the edited copy")
+        XCTAssertEqual(forked.origin, "custom")
+        XCTAssertEqual(forked.label, "更简洁一点")
+        XCTAssertEqual(forked.prompt, "把这段改得更简洁")
+        XCTAssertEqual(forked.appliesTo, ["text", "image"])
+    }
+
+    // group fork 只冻结 label（spec §3）：group 没有 prompt/appliesTo，children 原样带走。
+    func testForkGroupCarriesChildrenAndHasNoPromptOrAppliesTo() {
+        let group = PromptNode(id: "sys_style", type: "group", label: "图片风格", origin: "system", children: [
+            PromptNode(id: "sys_cartoon", type: "action", label: "卡通", origin: "system", prompt: "p", appliesTo: ["image"]),
+            PromptNode(id: "sys_ad", type: "action", label: "广告", origin: "system", prompt: "p2", appliesTo: ["image"]),
+        ])
+        var renamed = group
+        renamed.label = "我的图片风格"
+
+        let forked = PromptLogic.fork(renamed)
+        XCTAssertNotNil(forked.id.range(of: "^p_[a-z0-9]{8}$", options: .regularExpression), "id was \(forked.id)")
+        XCTAssertEqual(forked.forkedFrom, "sys_style")
+        XCTAssertEqual(forked.origin, "custom")
+        XCTAssertEqual(forked.type, "group")
+        XCTAssertEqual(forked.label, "我的图片风格")
+        XCTAssertNil(forked.prompt)
+        XCTAssertNil(forked.appliesTo)
+        XCTAssertEqual(forked.children?.map(\.id), ["sys_cartoon", "sys_ad"])
+    }
+
+    // MARK: - replacing（Task 5：fork-on-edit / 系统 group 改名的原位替换，PromptStore.replace 用）
+
+    func testReplacingTopLevelNodeSwapsInPlaceEvenWithDifferentId() {
+        let items = [
+            PromptNode(id: "sys_a", type: "action", label: "A", origin: "system", prompt: "p", appliesTo: ["text"]),
+            PromptNode(id: "b", type: "action", label: "B", origin: "user", prompt: "p", appliesTo: ["text"]),
+        ]
+        let forked = PromptNode(id: "p_new12345", type: "action", label: "A'", origin: "custom",
+                                 prompt: "p'", appliesTo: ["text"], forkedFrom: "sys_a")
+        let result = PromptLogic.replacing(items, id: "sys_a", with: forked)
+        XCTAssertEqual(result.map(\.id), ["p_new12345", "b"])
+        XCTAssertEqual(result[0].label, "A'")
+    }
+
+    func testReplacingChildInGroupKeepsSiblingsAndPosition() {
+        let items = [
+            PromptNode(id: "g", type: "group", label: "组", origin: "user", children: [
+                PromptNode(id: "c1", type: "action", label: "C1", origin: "user", prompt: "p", appliesTo: ["text"]),
+                PromptNode(id: "c2", type: "action", label: "C2", origin: "user", prompt: "p", appliesTo: ["text"]),
+            ]),
+        ]
+        let replacement = PromptNode(id: "c1", type: "action", label: "C1 改名", origin: "user", prompt: "p", appliesTo: ["text"])
+        let result = PromptLogic.replacing(items, id: "c1", with: replacement)
+        XCTAssertEqual(result[0].children?.map(\.id), ["c1", "c2"])
+        XCTAssertEqual(result[0].children?.first?.label, "C1 改名")
+    }
+
+    func testReplacingNonexistentIdLeavesItemsUnchanged() {
+        let items = [PromptNode(id: "a", type: "action", label: "A", origin: "user", prompt: "p", appliesTo: ["text"])]
+        let replacement = PromptNode(id: "z", type: "action", label: "Z", origin: "user", prompt: "p", appliesTo: ["text"])
+        let result = PromptLogic.replacing(items, id: "does-not-exist", with: replacement)
+        XCTAssertEqual(result, items)
+    }
+
     // MARK: - removing（MINOR 4：删除的位置逻辑抽成纯函数，单测覆盖）
 
     func testRemovingTopLevelAction() {

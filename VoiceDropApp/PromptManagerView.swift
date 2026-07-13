@@ -22,6 +22,13 @@ struct PromptManagerView: View {
     @State private var showNewSheet = false
     @State private var showImportSheet = false
     @State private var toast: String?
+    /// ＋ →「新建动作」交回的草稿（还没进 store.items）：sheet 关掉之后（`onDismiss`）
+    /// 才 push 编辑页，避免 sheet 收起动画和 push 动画打架。
+    @State private var pendingNewActionDraft: PromptNode?
+    @State private var newActionDraft: PromptNode?
+    /// 长按分组行「重命名」→ push 编辑页（分组没有独立的编辑入口，复用同一个
+    /// contextMenu 添加；PromptEditView 对 group 只画名字字段，改名系统 group 会 fork）。
+    @State private var renameTarget: PromptNode?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -82,13 +89,39 @@ struct PromptManagerView: View {
             Button(String(localized: "恢复默认提示词")) { Task { _ = await store.restoreDefaults() } }
             Button(String(localized: "取消"), role: .cancel) {}
         }
-        .sheet(isPresented: $showNewSheet) {
-            Text("新建（Task 5）").font(.system(size: 15)).foregroundStyle(Theme.secondary)
-                .presentationDetents([.medium])
+        .sheet(isPresented: $showNewSheet, onDismiss: {
+            // sheet 完全收起之后再 push 编辑页——避免 sheet dismiss 动画和 push 动画同时跑。
+            if let draft = pendingNewActionDraft {
+                pendingNewActionDraft = nil
+                newActionDraft = draft
+            }
+        }) {
+            PromptNewSheet(onNewAction: { draft in
+                pendingNewActionDraft = draft
+                showNewSheet = false
+            }, onNewGroup: { name in
+                showNewSheet = false
+                Task { await addGroup(named: name) }
+            })
+            .presentationDetents([.height(300)])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showImportSheet) {
             Text("导入（Task 6）").font(.system(size: 15)).foregroundStyle(Theme.secondary)
                 .presentationDetents([.medium])
+        }
+        .navigationDestination(item: $newActionDraft) { draft in
+            PromptEditView(draft: draft)
+        }
+        .navigationDestination(item: $renameTarget) { node in
+            PromptEditView(nodeID: node.id)
+        }
+    }
+
+    private func addGroup(named name: String) async {
+        let group = PromptNode(id: PromptLogic.newUserID(), type: "group", label: name, origin: "user", children: [])
+        if let err = await store.add(group) {
+            showToast(String(localized: "新建分组失败，已恢复（\(err)）"))
         }
     }
 
@@ -137,7 +170,7 @@ struct PromptManagerView: View {
 
     private func actionRow(_ node: PromptNode, indent: CGFloat) -> some View {
         NavigationLink {
-            Text(node.label) // Task 5 换成 PromptEditView
+            PromptEditView(nodeID: node.id)
         } label: {
             HStack(alignment: .top, spacing: 12) {
                 actionTile(node)
@@ -187,6 +220,11 @@ struct PromptManagerView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            // 分组行本身没有独立的「编辑」入口（点它是展开/收起），改名走长按菜单——
+            // PromptEditView 对 group 只画名字字段；系统 group 改名同样会 fork（spec §3）。
+            Button { renameTarget = node } label: {
+                Label(String(localized: "重命名"), systemImage: "pencil")
+            }
             Button(role: .destructive) { deleteTarget = node } label: {
                 Label(String(localized: "删除分组"), systemImage: "trash")
             }
