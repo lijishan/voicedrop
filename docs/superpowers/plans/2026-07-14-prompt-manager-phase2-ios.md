@@ -213,6 +213,7 @@ struct ShareState: Decodable { let code: String; let sharing: Bool }
 **行为（1d literal）：**
 - 长按任意行 → 进排序态：顶栏右上变「完成」（15/semibold `#D8593B`，＋隐藏）；每行左侧出 3 横线拖动手柄（`#C9C0B1`）；被拖行 `scale(1.03)` + 投影 `0 12 26 rgba(60,48,30,0.22)` + 1px `#EBD9B8` 边、手柄变 `#D8A25B`。
 - 实现用 SwiftUI `List` + `.onMove`（顶层与组内各自 onMove）；**拖进/拖出分组**用 drop target：拖动中分组行高亮 1.5pt dashed `#D8A25B` 边 +「拖到这里收进分组」提示，drop 到分组行 = 移入该组末尾；组内行拖到组外 = 移出。**两级封顶：分组行本身不可拖进别的分组**（drop 到分组行时若拖的是 group → 忽略 + 触觉反馈）。
+- **补 1b 左滑删除**（Task 4 裁定推迟到这里）：页面既然为 onMove 转了 `List`，顺手上 `.swipeActions` 红「删除」（走 Task 4 已有的确认/回滚流），**替换掉 Task 4 临时的长按 contextMenu 删除**。设计的左滑语义在本 Task 兑现。
 - 「完成」→ 一次 `store.save()`（整树 PUT 天然承载排序/分组——这就是当初选整树写的原因）。失败回滚 + toast。
 
 - [ ] Step 1 排序态 UI + onMove → Step 2 跨组 drop（进/出/组不进组）→ Step 3 完成时 PUT + 回滚 → Step 4 构建绿 + 手测录屏（排序、进组、出组、杀 app 重进顺序仍在）→ Step 5 提交。
