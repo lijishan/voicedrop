@@ -98,6 +98,46 @@ enum PromptLogic {
         return String(s[range])
     }
 
+    /// Task 6 Part B: PromptImportSheet 输入框变化处理——区分敲键盘（TYPING）vs 粘贴/自动补全
+    /// （PASTING），防止盲目 prefix(7) 误把 8 位手机号的前 7 位当成魔法数字。
+    ///
+    /// TYPING 路径（incoming 相对 previous 只在末尾增减≤1个字符）：
+    ///   保留原有简单逻辑——只过滤数字，封顶 7 位。数字小键盘打不出非数字，这里是保险。
+    ///
+    /// PASTING 路径（其它任何变化：粘贴、autofill、长度跳跃）：
+    ///   专属走 extractShareCode（服务端同款边界正则）。
+    ///   - 匹配成功 → 返回抠出的码。
+    ///   - 匹配失败 → 拒绝粘贴，保留原值（防止 "12345678" 闯入导入流程）。
+    static func mergeCodeInput(previous: String, incoming: String) -> String {
+        // 无变化
+        if incoming == previous { return incoming }
+
+        // 检测 TYPING：单个字符在末尾增加或删除
+        let isTyping: Bool
+        if incoming.count == previous.count + 1 {
+            // 末尾增加一个字符？
+            isTyping = incoming.hasPrefix(previous)
+        } else if incoming.count == previous.count - 1 {
+            // 末尾删除一个字符？
+            isTyping = previous.hasPrefix(incoming)
+        } else {
+            isTyping = false
+        }
+
+        if isTyping {
+            // TYPING 路径：简单过滤数字 + 封顶 7 位
+            let filtered = String(incoming.filter(\.isNumber).prefix(7))
+            return filtered
+        } else {
+            // PASTING 路径：只走 extractShareCode 的边界检验，不做盲目截断
+            if let extracted = extractShareCode(incoming) {
+                return extracted
+            }
+            // 找不到有效码 → 拒绝粘贴，保留原值
+            return previous
+        }
+    }
+
     /// 纯函数删除：在整棵树（顶层 + 组内子项）里找到 id 对应节点并摘除，返回新数组 +
     /// 被删的节点；删除一个分组连它的 children 一起带走（组本身就是一个节点）；
     /// 找不到该 id → 原数组原样返回 + nil。零索引状态——调用方（PromptStore.delete）

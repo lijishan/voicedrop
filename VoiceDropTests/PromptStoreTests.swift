@@ -565,4 +565,48 @@ final class PromptStoreTests: XCTestCase {
     func testExtractShareCodePicksFirstMatchWhenMultiplePresent() {
         XCTAssertEqual(PromptLogic.extractShareCode("先是 4820135 后来又提到 9012345"), "4820135")
     }
+
+    // MARK: - mergeCodeInput（Task 6 Part B: 敲键盘 vs 粘贴边界）
+
+    /// TYPING 路径：末尾增加 1 位数字 → 通过简单过滤 + 封顶逻辑。
+    func testMergeCodeInputTypingOneDigitAtEnd() {
+        let result = PromptLogic.mergeCodeInput(previous: "482013", incoming: "4820135")
+        XCTAssertEqual(result, "4820135", "typing one digit at end should pass")
+    }
+
+    /// PASTING 路径：8 位数字粘贴→被 extractShareCode 的边界拒绝→返回原值。
+    func testMergeCodeInputPasteEightDigitsRejected() {
+        let result = PromptLogic.mergeCodeInput(previous: "", incoming: "12345678")
+        XCTAssertEqual(result, "", "paste of 8 digits should be rejected")
+    }
+
+    /// PASTING 路径：从文本中抠码成功。
+    func testMergeCodeInputPasteExtractedFromText() {
+        let result = PromptLogic.mergeCodeInput(previous: "", incoming: "用 4820135 改")
+        XCTAssertEqual(result, "4820135", "should extract code from embedded text")
+    }
+
+    /// PASTING 路径：从链接中抠码成功。
+    func testMergeCodeInputPasteExtractedFromLink() {
+        let result = PromptLogic.mergeCodeInput(previous: "", incoming: "https://voicedrop.cn/4820135")
+        XCTAssertEqual(result, "4820135", "should extract code from link")
+    }
+
+    /// PASTING 路径：8 位数字粘贴到有值的字段，边界拒绝→保留原值。
+    func testMergeCodeInputPasteRejectedKeepsPrevious() {
+        let result = PromptLogic.mergeCodeInput(previous: "482013", incoming: "12345678")
+        XCTAssertEqual(result, "482013", "paste rejection should preserve previous value")
+    }
+
+    /// TYPING 路径：末尾删除 1 位数字。
+    func testMergeCodeInputDeletionFromEnd() {
+        let result = PromptLogic.mergeCodeInput(previous: "4820135", incoming: "482013")
+        XCTAssertEqual(result, "482013", "deleting one digit at end should work")
+    }
+
+    /// PASTING 路径：含空格的数字序列，边界正则拒绝（不允许空格破坏边界）。
+    func testMergeCodeInputPasteWithSpacesBoundaryReject() {
+        let result = PromptLogic.mergeCodeInput(previous: "", incoming: "482 0135")
+        XCTAssertEqual(result, "", "paste with spaces should be rejected per boundary rules")
+    }
 }

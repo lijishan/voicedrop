@@ -26,7 +26,9 @@ struct PromptImportSheet: View {
 
     init(prefill: String? = nil, onImported: @escaping (PromptNode) -> Void = { _ in }) {
         self.onImported = onImported
-        _code = State(initialValue: Self.sanitize(prefill ?? ""))
+        // 初始化时用 mergeCodeInput，从空值到 prefill（模拟粘贴路径——走完整边界校验）
+        let prefillValue = prefill ?? ""
+        _code = State(initialValue: PromptLogic.mergeCodeInput(previous: "", incoming: prefillValue))
     }
 
     private enum PreviewState {
@@ -82,11 +84,11 @@ struct PromptImportSheet: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(isFocused ? Theme.accent : Theme.borderChrome, lineWidth: isFocused ? 1.5 : 1)
             )
-            .onChange(of: code) { _, new in
-                let sanitized = Self.sanitize(new)
-                guard sanitized == new else { code = sanitized; return }   // 净化后的值再走一轮 onChange
-                if sanitized.count == 7 {
-                    fetchPreview(for: sanitized)
+            .onChange(of: code) { old, new in
+                let merged = PromptLogic.mergeCodeInput(previous: old, incoming: new)
+                guard merged == new else { code = merged; return }   // 合并后的值再走一轮 onChange
+                if merged.count == 7 {
+                    fetchPreview(for: merged)
                 } else {
                     previewTask?.cancel()
                     previewState = .idle
@@ -94,14 +96,6 @@ struct PromptImportSheet: View {
             }
     }
 
-    /// 粘贴含链接的整段文本 → 用 PromptLogic.extractShareCode 抠码；纯数字键盘敲出来的
-    /// 输入直接过滤非数字字符 + 封顶 7 位（numberPad 本来打不出非数字，封顶只是保险）。
-    private static func sanitize(_ raw: String) -> String {
-        if !raw.allSatisfy(\.isNumber), let extracted = PromptLogic.extractShareCode(raw) {
-            return extracted
-        }
-        return String(raw.filter(\.isNumber).prefix(7))
-    }
 
     // MARK: - 预览卡 / 错误态（同一块「卡片位置」，三态共用同一个容器）
 

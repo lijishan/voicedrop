@@ -98,7 +98,7 @@ final class AppRouter: ObservableObject {
         guard let first = segs.first else { return .recordings }   // 落地页 = App 主页
         // 7 位纯数字＝提示词魔法数字（Task 6），判在 shareLink 前面：文章分享 id 是 10 位
         // hex、社区帖 12 位，跟 7 位数字没有交集，但 shareLink 的宽正则会把纯数字也吃进去，
-        // 所以窄的先判。
+        // 所以窄的先判。jianshuo.dev/voicedrop/<7位码> 也有意在此识别，与服务端落地页路由对齐。
         if segs.count == 1, first.range(of: "^[1-9][0-9]{6}$", options: .regularExpression) != nil {
             return .promptImport(code: first)
         }
