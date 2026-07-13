@@ -1,5 +1,31 @@
 # VoiceDrop Android 开发日志
 
+## 2026-07-09 — 上游功能复刻 & 体验打磨
+
+### 上游 iOS 功能复刻
+- **VoiceEdit 错误可见** (`VoiceEdit.kt`, `PushToTalkBar.kt`): dictation 故障不再静默。lastError 优先显示, PushToTalkBar 红色渲染错误文本（对标 `0550b9c`）
+- **Library HTTP 风暴修复** (`Library.kt`): 文章标题磁盘缓存 (SharedPreferences) + Semaphore(5) 并发限制。冷启动从 10+ HTTP → 0~2 HTTP（对标 `e54eb66`）
+- **AI 采访员** (3 新文件): `EngineRecorder.kt` (PCM 旁路采集), `RealtimeInterviewer.kt` (开关/半双工/断线重连), `RealtimeSession.kt` (WS relay)。录音页停止键左侧 Forum 按钮一键开关（对标 `bddcaa9`, `a3e4fa1`, `e869d6e`）
+- **分享域名**: 服务器已处理，无需客户端改动（对标 `bffcaaa`）
+
+### UI / UX 打磨
+- **分享合并**: 顶栏一个分享图标 → 三选一弹窗（分享链接/VD社区/公众号草稿）
+- **录音按钮**: 纯红圆 + 浅灰描边 + 半透明白环 (Icons.Outlined.Circle)
+- **详情页**: 标题下移内容区, 日期后加作者名
+- **社区详情**: 标题优先 → 作者 · 日期 → 正文
+- **下拉刷新**: graphicsLayer + animateFloatAsState(spring) 自定义弹簧动画
+
+### 数据修复
+- **社区列表**: `CommunityPost.replyTo` 改为 `Any?` 兼容字符串/对象两种格式
+- **社区列表**: `List<CommunityPost>` → `CommunityListResp` 包装类修复 JSON 解析
+- **新录音插入**: `addLocalRecording()` 服务器同步延迟 3s 等待 Uploader
+- **WECHAT/CLAUDE 保存**: 上传 key 去掉 scope 前缀重复
+
+### 基础设施
+- **单元测试**: 14 个用例 (ModelParse, RecordingName, CommunityStore)
+- **i18n**: 60+ 字符串提取到 `strings.xml`, 全量 `stringResource()` 引用
+- **Code Review**: `!!` 空指针加固 4 处, 空 catch 加 `Log.w` 23 处
+
 ## 2026-07-08 — 项目初始化 & 核心功能验证通过
 
 ### 项目骨架
@@ -65,13 +91,15 @@
 - **ShareIntake**: ACTION_SEND intent filter, 文字/图片/音频接收
 
 ### 已知问题
-- 模拟器: Intel Mac 上 ANGLE 不兼容, 无法启动 (Failed to restore previous context: 12297)。真机测试无此问题
+- 模拟器: Intel Mac 上 ANGLE 不兼容, 无法启动。真机测试无此问题
 - 服务器挖矿需手动触发: 录音后点「立即处理」按钮或等 6 小时 cron
-- 列表刷新需切 tab 触发, 没有下拉刷新手势
+- pull-to-refresh: 自定义弹簧动画可用, 但 Material3 PullToRefreshBox 需 BOM >= 2024.12.00
 
 ### 待后续
 - 语音编辑真机验证 (PushToTalk / ASR / AgentSession)
-- 社区 & 追问真机验证
+- AI 采访真机验证 (EngineRecorder / RealtimeInterviewer / RealtimeSession)
+- Push 通知 (FCM)
+- i18n 英文翻译
 - 下拉刷新
 - 语音指令 (LibraryCommandSession)
 - 设备配对 (DeviceLink)
