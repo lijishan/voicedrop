@@ -2,7 +2,87 @@
 
 **打开即录音，停止即自动上传——一个口述捕捉器。** 录下来的音频进入 `jianshuo.dev/files`（R2 收件箱）。
 
-这个 repo 只装 **iOS App**。
+这个 repo 装 **iOS App** 和 **Android App**。
+
+---
+
+## Android App（`android/`）
+
+### 技术栈
+
+Kotlin 2.0 + Jetpack Compose + Material3 + OkHttp + Gson，单一 Activity 架构，compose BOM 2024.05，最低 API 26 (Android 8.0)。
+
+### 编译 & 安装
+
+```bash
+cd android
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+
+# 编译 debug APK
+gradle assembleDebug --no-daemon
+
+# 安装到 USB 连接的设备
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+### 运行测试
+
+```bash
+cd android
+gradle test --no-daemon       # 14 个单元测试（ModelParse / RecordingName / CommunityStore）
+```
+
+### 代码结构（31 个 Kotlin 文件）
+
+| 文件 | 作用 |
+|------|------|
+| `VoiceDropApp.kt` | Application 入口，Store 初始化，StatusSession 启动 |
+| `MainActivity.kt` | 单一 Activity，CompositionLocal 注入 |
+| `AppRouter.kt` | Compose Navigation 路由 + 依赖注入 |
+| `Model.kt` | 全部数据模型（ArticleDoc, Recording, CommunityPost 等） |
+| `Networking.kt` | OkHttp REST 客户端 + WebSocket |
+| `Auth.kt` | 匿名 token 生成 + EncryptedSharedPreferences |
+| `Library.kt` | LibraryStore: 录音列表 + 刷新 + 元数据缓存 |
+| `LibraryView.kt` | 首页（我的录音 / VD社区 + 底栏录音按钮 + 下拉刷新） |
+| `RecordSession.kt` | 全屏录音 Dialog + AI 采访开关 |
+| `RecordingDetailView.kt` | 文章详情 + 分享菜单 + 按住说话 |
+| `AudioRecorder.kt` | MediaRecorder AAC/M4A 封装（兼容 API 26+） |
+| `EngineRecorder.kt` | AudioRecord PCM 旁路采集（AI 采访上行） |
+| `VoiceEdit.kt` | 火山流式 ASR（PCM 16kHz + gzip 二进制协议） |
+| `PushToTalkBar.kt` | 按住说话手势条 |
+| `AgentSession.kt` | 文章编辑 WS Agent |
+| `RealtimeInterviewer.kt` | AI 采访员编排（开关 / 半双工 / 断线重连） |
+| `RealtimeSession.kt` | OpenAI Realtime relay WS 客户端 |
+| `Uploader.kt` | 后台上传队列 |
+| `RecordingName.kt` | 文件名构造 / 解析（纯 ASCII） |
+| `Formatting.kt` | 智能日期 / 时长格式化 |
+| `Community.kt` | VD 社区 Store + 列表 + 详情 |
+| `FollowupQuestions.kt` | 追问卡片 UI |
+| `SettingsView.kt` | 设置页（名字 / 文风 / 公众号 / 算力 / 账号删除） |
+| `UsageView.kt` | 算力余额弹窗 |
+| `WeChatPublish.kt` | 公众号草稿发布 |
+| `ShareIntake.kt` | ACTION_SEND 分享接收 |
+| `StatusSession.kt` | WS 挖矿状态实时推送 |
+| `Theme.kt` | VDTheme 颜色 / 字体 tokens |
+
+### 架构（镜像 iOS）
+
+| iOS | Android |
+|-----|---------|
+| `@Observable class` | `class` + `mutableStateOf` |
+| `@Environment(Store.self)` | `CompositionLocal` |
+| `URLSession` | OkHttp |
+| `Keychain` | EncryptedSharedPreferences |
+| `NavigationStack` | Compose NavHost |
+| `fullScreenCover` | Dialog (RecordSession) |
+
+### 已知限制
+
+- 模拟器: Intel Mac 上 ANGLE 不兼容，无法启动。真机测试无问题
+- 社区写操作（分享/回复）需 Apple Sign-in，Android 端只读
+- 下拉刷新用自定义 spring 动画（Material3 PullToRefreshBox 需 BOM 升级）
+- 文件名纯 ASCII（中文星期/时段改为 Wed/am），因服务器 URL 编码限制
 
 ---
 
