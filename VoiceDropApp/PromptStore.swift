@@ -403,6 +403,43 @@ final class PromptStore {
         return nil
     }
 
+    /// 1b 左滑/长按删除：本地先移除该节点（顶层项，或组内子项——组被删连子项一起，
+    /// 因为组本身就是一个节点），再 PUT 整树保存；失败把节点恢复回原位置。
+    /// nil = 成功；非 nil = 给用户看的错误文案（此时 items 已经恢复原状）。
+    func delete(id: String) async -> String? {
+        guard let removed = removeNode(id: id) else { return nil }
+        if let err = await save() {
+            restoreNode(removed.node, topIndex: removed.topIndex, childIndex: removed.childIndex)
+            return err
+        }
+        return nil
+    }
+
+    private func removeNode(id: String) -> (node: PromptNode, topIndex: Int, childIndex: Int?)? {
+        if let i = items.firstIndex(where: { $0.id == id }) {
+            let node = items.remove(at: i)
+            return (node, i, nil)
+        }
+        for (gi, group) in items.enumerated() where group.type == "group" {
+            if let ci = group.children?.firstIndex(where: { $0.id == id }) {
+                let node = items[gi].children!.remove(at: ci)
+                return (node, gi, ci)
+            }
+        }
+        return nil
+    }
+
+    private func restoreNode(_ node: PromptNode, topIndex: Int, childIndex: Int?) {
+        if let childIndex {
+            guard topIndex < items.count else { items.append(node); return }
+            let insertAt = min(childIndex, items[topIndex].children?.count ?? 0)
+            items[topIndex].children = items[topIndex].children ?? []
+            items[topIndex].children!.insert(node, at: insertAt)
+        } else {
+            items.insert(node, at: min(topIndex, items.count))
+        }
+    }
+
     /// POST /agent/prompts/import {code}。成功后刷新整树（服务端已经把新条目
     /// 追加进用户的 prompts.json，本地需要重新 GET 才能拿到完整、带派生字段的列表）。
     func importPrompt(code: String) async -> Result<PromptNode, PromptError> {

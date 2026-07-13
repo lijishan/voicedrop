@@ -1,0 +1,300 @@
+import SwiftUI
+
+// 设置 → 提示词（5a）：Prompt Manager 重构 Phase 2 的新列表页，替换旧的 InstructionSettingsView
+// （旧页仍在文件里，Task 8 再删）。真源 = PromptStore（ref/fork 模型，GET/PUT /agent/prompts）。
+// spec: docs/superpowers/specs/2026-07-13-prompt-manager-redesign.md §9
+// plan: docs/superpowers/plans/2026-07-14-prompt-manager-phase2-ios.md Task 4
+//
+// 删除的落地方式：设计稿要「左滑删除」，但本页沿用旧页 ScrollView + SettingsCard 的卡片视觉
+// （圆角卡+自定义分隔线），改用真正的 List 才有原生 .swipeActions；List 若要长得和现有
+// SettingsCard 一样（合并圆角、NavigationLink 行还不能带系统自带的 disclosure chevron 和
+// 我们手画的 settingsChevron 重复）风险和改动量都不小。plan 本身把 ScrollView + contextMenu
+// 列为可接受的备选（"if you keep ScrollView, use contextMenu 「删除」as the affordance instead
+// and note it"）——这里选了它：长按任意行弹出「删除」，行为（confirmationDialog → 从
+// store.items 移除 → 保存 → 失败回滚）与设计稿完全一致，只是触发手势从左滑换成长按。
+
+struct PromptManagerView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var store = PromptStore.shared
+    @State private var expandedGroups: Set<String> = []
+    @State private var deleteTarget: PromptNode?
+    @State private var showRestoreConfirm = false
+    @State private var showNewSheet = false
+    @State private var showImportSheet = false
+    @State private var saveError: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                NavSquare(systemName: "chevron.left", size: 36) { dismiss() }
+                Text("提示词").font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.ink)
+                Spacer()
+                addButton
+            }
+            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 6)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("一套指令，长按文字或图片时按『适用于』自动筛选。改过的系统项标『已自定义』，自己建的标『自建』。")
+                        .font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
+                        .padding(.horizontal, 4).padding(.bottom, 2)
+
+                    if let err = saveError {
+                        Text(err).font(.system(size: 12.5)).foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 4)
+                    }
+
+                    if store.loading && store.items.isEmpty {
+                        HStack { Spacer(); ProgressView().tint(Theme.accent).padding(.top, 40); Spacer() }
+                    } else if let err = store.error, store.items.isEmpty {
+                        Text(err).font(.system(size: 14)).foregroundStyle(Theme.faint)
+                            .frame(maxWidth: .infinity, alignment: .center).padding(.top, 40)
+                    } else {
+                        SettingsCard {
+                            ForEach(Array(flatRows.enumerated()), id: \.element.id) { i, row in
+                                rowView(row)
+                                if i < flatRows.count - 1 { settingsRowDivider }
+                            }
+                        }
+
+                        importBox
+
+                        Button {
+                            showRestoreConfirm = true
+                        } label: {
+                            Text("恢复默认提示词").font(.system(size: 13)).foregroundStyle(Theme.accent)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 4)
+                    }
+                }
+                .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 40)
+            }
+        }
+        .background(Theme.appBG.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+        .task { await store.refresh() }
+        .confirmationDialog(deleteDialogTitle, isPresented: deleteDialogBinding, titleVisibility: .visible) {
+            Button(String(localized: "删除"), role: .destructive) {
+                if let node = deleteTarget { Task { await performDelete(node) } }
+            }
+            Button(String(localized: "取消"), role: .cancel) {}
+        }
+        .confirmationDialog(String(localized: "把系统自带的提示词补回列表？你自建和改过的都不受影响。"),
+                             isPresented: $showRestoreConfirm, titleVisibility: .visible) {
+            Button(String(localized: "恢复默认提示词")) { Task { _ = await store.restoreDefaults() } }
+            Button(String(localized: "取消"), role: .cancel) {}
+        }
+        .sheet(isPresented: $showNewSheet) {
+            Text("新建（Task 5）").font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showImportSheet) {
+            Text("导入（Task 6）").font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                .presentationDetents([.medium])
+        }
+    }
+
+    // MARK: - 顶栏「＋」
+
+    private var addButton: some View {
+        Button { showNewSheet = true } label: {
+            RoundedRectangle(cornerRadius: Theme.R.nav)
+                .fill(Theme.accent)
+                .frame(width: 36, height: 36)
+                .overlay(Image(systemName: "plus").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - 行（顶层项 + 展开的组内子项，摊平成一个数组统一画分隔线）
+
+    private enum Row: Identifiable {
+        case action(PromptNode, indent: CGFloat)
+        case group(PromptNode)
+        var id: String {
+            switch self {
+            case .action(let n, _): return n.id
+            case .group(let n): return n.id
+            }
+        }
+    }
+
+    private var flatRows: [Row] {
+        store.items.flatMap { node -> [Row] in
+            guard node.type == "group" else { return [.action(node, indent: 0)] }
+            var rows: [Row] = [.group(node)]
+            if expandedGroups.contains(node.id) {
+                rows += (node.children ?? []).map { .action($0, indent: 16) }
+            }
+            return rows
+        }
+    }
+
+    @ViewBuilder private func rowView(_ row: Row) -> some View {
+        switch row {
+        case .group(let node): groupRow(node)
+        case .action(let node, let indent): actionRow(node, indent: indent)
+        }
+    }
+
+    private func actionRow(_ node: PromptNode, indent: CGFloat) -> some View {
+        NavigationLink {
+            Text(node.label) // Task 5 换成 PromptEditView
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                actionTile(node)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(node.label).font(.system(size: 15)).foregroundStyle(Theme.ink)
+                        originBadge(node.origin)
+                    }
+                    appliesToBadges(node.appliesTo ?? [])
+                }
+                Spacer(minLength: 8)
+                settingsChevron
+            }
+            .padding(.leading, indent)
+            .padding(.vertical, 12).padding(.horizontal, 15)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) { deleteTarget = node } label: {
+                Label(String(localized: "删除"), systemImage: "trash")
+            }
+        }
+    }
+
+    private func groupRow(_ node: PromptNode) -> some View {
+        let expanded = expandedGroups.contains(node.id)
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                if expanded { expandedGroups.remove(node.id) } else { expandedGroups.insert(node.id) }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                iconTile(bg: Theme.tileNeutral, symbol: "folder", fg: Theme.secondary)
+                HStack(spacing: 6) {
+                    Text(node.label).font(.system(size: 15)).foregroundStyle(Theme.ink)
+                    Text("分组 · \(node.children?.count ?? 0) 项")
+                        .font(.system(size: 12)).foregroundStyle(Theme.sectionLabel)
+                }
+                Spacer(minLength: 8)
+                settingsChevron.rotationEffect(.degrees(expanded ? 90 : 0))
+            }
+            .padding(.vertical, 12).padding(.horizontal, 15)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) { deleteTarget = node } label: {
+                Label(String(localized: "删除分组"), systemImage: "trash")
+            }
+        }
+    }
+
+    // MARK: - 图标块 / 标
+
+    private func iconTile(bg: Color, symbol: String, fg: Color, size: CGFloat = 34, iconSize: CGFloat = 14) -> some View {
+        RoundedRectangle(cornerRadius: Theme.R.tile)
+            .fill(bg)
+            .frame(width: size, height: size)
+            .overlay(Image(systemName: symbol).font(.system(size: iconSize)).foregroundStyle(fg))
+    }
+
+    /// 图标按内容挑：只适用于图片的动作用 photo/赭红，其余（仅文字或都行）用 text.quote/中性灰。
+    private func actionTile(_ node: PromptNode) -> some View {
+        let imageOnly = (node.appliesTo ?? []) == ["image"]
+        return iconTile(bg: imageOnly ? Theme.accentSoft : Theme.tileNeutral,
+                         symbol: imageOnly ? "photo" : "text.quote",
+                         fg: imageOnly ? Theme.accent : Theme.secondary)
+    }
+
+    @ViewBuilder private func originBadge(_ origin: String) -> some View {
+        switch origin {
+        case "custom": badge(String(localized: "已自定义"), fg: Theme.amber, bg: Theme.amberSoft, weight: .semibold)
+        case "user": badge(String(localized: "自建"), fg: Theme.greenDone, bg: Theme.okBannerBG, weight: .semibold)
+        default: EmptyView() // system 是常态，不画标
+        }
+    }
+
+    @ViewBuilder private func appliesToBadges(_ appliesTo: [String]) -> some View {
+        let hasText = appliesTo.contains("text")
+        let hasImage = appliesTo.contains("image")
+        HStack(spacing: 6) {
+            if hasText && hasImage {
+                badge(String(localized: "文字"), fg: Color(hex: "7A6E5C"), bg: Theme.tileNeutral)
+                badge(String(localized: "图片"), fg: Color(hex: "7A6E5C"), bg: Theme.tileNeutral)
+            } else if hasText {
+                badge(String(localized: "仅文字"), fg: Theme.greenDone, bg: Theme.okBannerBG)
+            } else if hasImage {
+                badge(String(localized: "仅图片"), fg: Theme.accent, bg: Theme.accentSoft)
+            }
+        }
+    }
+
+    private func badge(_ text: String, fg: Color, bg: Color, weight: Font.Weight = .regular) -> some View {
+        Text(text)
+            .font(.system(size: 10.5, weight: weight))
+            .foregroundStyle(fg)
+            .padding(.vertical, 1).padding(.horizontal, 6)
+            .background(bg, in: RoundedRectangle(cornerRadius: 4))
+    }
+
+    // MARK: - 4a 导入虚线框
+
+    private var importBox: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { showImportSheet = true } label: {
+                HStack(spacing: 12) {
+                    iconTile(bg: Theme.accentSoft, symbol: "square.and.arrow.down", fg: Theme.accent, size: 42, iconSize: 18)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("输入魔法数字导入").font(.system(size: 15.5, weight: .semibold)).foregroundStyle(Theme.ink)
+                        Text("把别人分享的提示词存进你的菜单").font(.system(size: 12.5)).foregroundStyle(Theme.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    settingsChevron
+                }
+                .padding(16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(Color(hex: "FBF3E9"), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color(hex: "D8B08A"), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+            )
+
+            Text("也可以在录音时直接对 VoiceDrop 说出数字，或点开 voicedrop.cn 链接自动跳转到这里。")
+                .font(.system(size: 12)).foregroundStyle(Theme.faint)
+                .padding(.horizontal, 4)
+        }
+        .padding(.top, 14)
+    }
+
+    // MARK: - 删除
+
+    private var deleteDialogBinding: Binding<Bool> {
+        Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })
+    }
+
+    private var deleteDialogTitle: String {
+        guard let node = deleteTarget else { return "" }
+        if node.type == "group" {
+            let n = node.children?.count ?? 0
+            return String(localized: "删除分组『\(node.label)』和组内 \(n) 条？此操作不可恢复（可用底部「恢复默认提示词」找回系统项）")
+        }
+        return String(localized: "删除『\(node.label)』？此操作不可恢复（可用底部「恢复默认提示词」找回系统项）")
+    }
+
+    private func performDelete(_ node: PromptNode) async {
+        expandedGroups.remove(node.id)
+        guard let err = await store.delete(id: node.id) else { return }
+        saveError = err
+        Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if saveError == err { saveError = nil }
+        }
+    }
+}
