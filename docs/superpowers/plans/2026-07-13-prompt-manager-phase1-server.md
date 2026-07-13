@@ -1230,6 +1230,9 @@ EOF
 
 ### Task 6: `POST /agent/prompt-classify` — AI 建议 appliesTo
 
+> ❌ **已砍（2026-07-13 用户拍板，实现后又删）**：AI 分类 = 凭空多一次 Claude 调用 + 等待，没有意义。
+> 新建默认「都行」（5a 脚注本来的语义），5c 不再有琥珀条。删除动作并入 Task 11。以下保留仅作历史记录。
+
 **Files:**
 - Create: `agent/src/prompt-classify.js`
 - Create: `agent/test/prompt-classify.test.js`
