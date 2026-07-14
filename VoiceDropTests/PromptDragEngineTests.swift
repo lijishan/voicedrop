@@ -221,4 +221,52 @@ final class PromptDragEngineTests: XCTestCase {
         let target = PromptDragEngine.dropIndex(fingerY: 10, rows: makeRows(), draggedID: "ghost", draggedKind: .action, items: makeItems())
         XCTAssertEqual(target, .reorder(index: 0, scope: .topLevel))
     }
+
+    // MARK: - Task 2 (6c/6d)：folder 悬停张口 + 拖出分组落点区
+    //
+    // 这两个功能的视觉/0.3s 计时都在 View 层（`PromptManagerView.updateHoverDwell`，可取消
+    // `Task.sleep`，没有做成可单测的纯逻辑，手测覆盖，见 task-2-report.md），但它们依赖的
+    // 几何判定全在 `dropIndex`/`apply` 里——Task 1 就写好了，这里把 Task 2 实际依赖的切片
+    // 单独钉一遍防回归，没有新增引擎逻辑（6d「移到分组外」落点区没有加新的
+    // `RowFrame.Kind`：它画在组的行帧并集正下方，天然落在既有的"越出组 span"判定范围内，
+    // 不需要单独发布一份帧）。
+
+    /// 6d 落点区命中：区域画在组最后一行（G1 span = title(60-120) ∪ children(120-220) =
+    /// 60...220）的正下方，手指落在 230（区域内、还没碰到下一个顶层行 B 的标题/行帧）——
+    /// dropIndex 对拖 .child 的既有"越出组 span"判定天然给出 .outOfGroup。
+    func testFingerInOutOfGroupZoneBelowLastChildProducesOutOfGroup() {
+        let target = PromptDragEngine.dropIndex(fingerY: 230, rows: makeRows(), draggedID: "C2", draggedKind: .child(parent: "G1"), items: makeItems())
+        XCTAssertEqual(target, .outOfGroup(parent: "G1"))
+    }
+
+    /// 落点区只在拖组内行时才画（`isDraggingChildOf`）——同一个 Y 位置，如果拖的不是
+    /// child（比如顶层 action），dropIndex 根本不会走 outOfGroup 分支，落到普通顶层重排。
+    func testSameYPositionWithNonChildDragProducesPlainReorderNotOutOfGroup() {
+        let target = PromptDragEngine.dropIndex(fingerY: 230, rows: makeRows(), draggedID: "A", draggedKind: .action, items: makeItems())
+        if case .outOfGroup = target {
+            XCTFail("dragging a non-child at this Y must never produce .outOfGroup, got \(target)")
+        }
+        // 候选（排除 A）= [G1(mid90), B(mid250), G2(mid310)]；230 只比 G1.mid 大 → index 1。
+        XCTAssertEqual(target, .reorder(index: 1, scope: .topLevel))
+    }
+
+    /// 6c 松手收纳落地位置——张口收进去永远追加在 children 数组最后一位，不是插在中间/最前
+    /// （`PromptLogic.movingIntoGroup` 内部固定 `append`）。dwell 的"到点才真收"是 View 层
+    /// `armedGroupID` 的活；这里钉住"到点了、松手"这半段——apply 本身——的落点位置正确。
+    func testReleaseIntoGroupAfterDwellArmsAppendsAtChildrenEnd() {
+        let items = makeItems() // G1 = [C1, C2]
+        let moved = PromptDragEngine.apply(.intoGroup(id: "G1"), draggedID: "B", items: items)
+        XCTAssertEqual(moved?.first(where: { $0.id == "G1" })?.children?.map(\.id), ["C1", "C2", "B"])
+    }
+
+    /// candidate 几何切换：手指从 G1 标题帧移到 G2 标题帧，dropIndex 应该分别给出各自的
+    /// `.intoGroup(id)`——这是 View 层 0.3s dwell 用来判断"candidate 变了、要不要取消旧计时
+    /// 重开一个"的输入源（`updateHoverDwell`）。这里只钉住几何切换本身的正确性；计时器真的
+    /// 因此复位、重新攒 0.3s 是 view-only 逻辑，手测项，见 task-2-report.md。
+    func testHoverCandidateSwitchesWhenFingerMovesFromOneGroupTitleToAnother() {
+        let onG1 = PromptDragEngine.dropIndex(fingerY: 90, rows: makeRows(), draggedID: "A", draggedKind: .action, items: makeItems())
+        XCTAssertEqual(onG1, .intoGroup(id: "G1"))
+        let onG2 = PromptDragEngine.dropIndex(fingerY: 310, rows: makeRows(), draggedID: "A", draggedKind: .action, items: makeItems())
+        XCTAssertEqual(onG2, .intoGroup(id: "G2"))
+    }
 }

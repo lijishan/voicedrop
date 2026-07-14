@@ -15,10 +15,17 @@ import UIKit
 // `ScrollView` + 手画的卡片 `VStack`；普通态（List + 左滑删除/导入/恢复默认/高亮）完全不动。
 // **「移出分组」左滑动作已随这次改造删除**——它原来挂在 Task 7 的组内子行上（`reorderChildRow`
 // 的 `.swipeActions`），而 `swipeActions` 是 List 专属修饰符，编辑态换成 ScrollView 后这个
-// UI 天然消失了，不是本次刻意裁剪的功能。**拖出分组的等价能力（6d「移到分组外」落点区）
-// 交给 Task 2**——`PromptDragEngine` 已经把 `.outOfGroup` 判定和落地都实现好并测过了，
-// Task 1 只是 UI 层暂时把这个 target 当 `.none` 处理（松手不生效，行弹回原位），代码里
-// 标了 `// Task 2` 的位置就是要接张口/落点区视觉的地方。
+// UI 天然消失了，不是本次刻意裁剪的功能。等价能力是 6d 的「移到分组外」落点区（见下）。
+//
+// **第 6 轮拖拽重构（Task 2，2026-07-14）**：6c（folder 悬停 0.3s「张口」收纳）+ 6d（展开
+// folder 拖组内行出来）落地——`PromptDragEngine.dropIndex` 早在 Task 1 就把 `.intoGroup`/
+// `.outOfGroup` 判定算好了，Task 2 只是接 UI：`armedGroupID`（悬停满 0.3s 才非 nil，见
+// `updateHoverDwell`）驱动 folder 卡「张口」视觉 + `commitDrag` 真正 `apply(.intoGroup...)`；
+// 拖组内行时该组卡片下方常驻「移到分组外」落点区（`outZoneView`），命中判定复用既有的
+// 「手指越出组的行帧并集」几何，没有加新的 RowFrame kind。0.3s 悬停计时是 view-only 的
+// 可取消 `Task.sleep`（`hoverDwellTask`），没有做成可单测的纯逻辑——手测覆盖，见
+// `.superpowers/sdd/task-2-report.md`。
+// plan: docs/superpowers/plans/2026-07-14-prompt-manager-drag-6a6d.md Task 2（6c/6d）。
 //
 // **排序态的模型（长按进入，「完成」退出并整树 PUT，Task 7 建立、这次原样保留）**：进入时把
 // `store.items` 复制一份到本地 `draft`，之后所有拖动/拖进拖出操作只改 `draft`，UI 全程从
@@ -95,6 +102,21 @@ struct PromptManagerView: View {
     /// `PromptDragEngine.dropIndex` 算出的当前落点——驱动缝隙动画 + 松手落地。
     @State private var dropTarget: DropTarget = .none
 
+    // MARK: - 第 6 轮拖拽（6c，Task 2）：folder 悬停 0.3s 张口——纯 View 层计时状态
+
+    /// 这一刻 `dropIndex` 原始输出若是 `.intoGroup(id)` 就是那个 folder id，否则 nil——
+    /// `updateHoverDwell` 用它判断 candidate 有没有变（变了=手指挪到别的标题/离开了所有
+    /// 标题，要取消旧计时重开新的；没变=继续悬停同一个 folder，什么也不做，否则永远攒不够
+    /// 0.3s）。跟 `armedGroupID` 分开存是因为 candidate 在计时没跑完时也会先变化。
+    @State private var hoverCandidateID: String?
+    /// 当前 candidate 的 0.3s 计时——可取消 `Task.sleep`（view-only，未落成可单测的纯逻辑，
+    /// 见 task-2-report.md「dwell 状态机」一节，手测覆盖）。candidate 变化/松手/退出排序态
+    /// 都会 cancel 并清空。
+    @State private var hoverDwellTask: Task<Void, Never>?
+    /// 非 nil = 连续悬停满 0.3s，对应 folder 已经「张口」——drop 才算 armed，松手才会真的
+    /// `apply(.intoGroup...)`；没到点松手（这个字段还是 nil）等同 `.none`，行弹回原位。
+    @State private var armedGroupID: String?
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -110,6 +132,10 @@ struct PromptManagerView: View {
             guard phase != .active else { return }
             editDrag = nil
             dropTarget = .none
+            hoverDwellTask?.cancel()
+            hoverDwellTask = nil
+            hoverCandidateID = nil
+            armedGroupID = nil
         }
         .overlay(alignment: .bottom) { toastView }
         .toolbar(.hidden, for: .navigationBar)
@@ -428,7 +454,7 @@ struct PromptManagerView: View {
         }
     }
 
-    // MARK: - 编辑态（第 6 轮拖拽，6a/6b）：ScrollView + 手写卡片，≡ 手柄驱动 PromptDragEngine
+    // MARK: - 编辑态（第 6 轮拖拽，6a-6d）：ScrollView + 手写卡片，≡ 手柄驱动 PromptDragEngine
 
     private let editCoordSpace = "promptManagerEditRows"
 
@@ -448,8 +474,9 @@ struct PromptManagerView: View {
     /// 编辑态当前应渲染的行序列：被拖的那一行（连同——如果拖的是展开着的 folder 标题——它
     /// 露出来的孤儿子行）**留在数组里**（身份修复，见文件头长注释），渲染时靠 `isRowCollapsed`
     /// 收成 0 高度；当前 `dropTarget` 若是 `.reorder`，在对应 scope 里插入一个 44pt 缝隙占位。
-    /// `.intoGroup`/`.outOfGroup`/`.none` 不出缝隙——folder 张口 / 移出区是 Task 2 的活，
-    /// Task 1 阶段悬停在这些落点上时列表就正常收拢，松手也不生效。
+    /// `.intoGroup` 不出缝隙——命中的 folder 卡自己「张口」（6c，见 `editGroupRow`）就是它的
+    /// 视觉反馈；`.outOfGroup` 也不出缝隙——拖的是组内行时，该组卡片下方常驻「移到分组外」
+    /// 落点区（6d，见下面 `isDraggingChildOf`），不需要额外插缝隙。
     private func editRows() -> [EditRow] {
         var topLevelChunks: [[EditRow]] = []
 
@@ -463,6 +490,13 @@ struct PromptManagerView: View {
                         children.insert(.gap, at: insertAt)
                     }
                     chunk += children
+                }
+                // 6d：拖的是这个组的某个子行时，卡片下方常驻「移到分组外」落点区（拖动全程
+                // 都在，不是只在悬停命中时才出现）——命中判定不需要给它单独发帧：dropIndex
+                // 对 .child 拖拽本来就把「手指越出组的行帧并集（title ∪ children）」判成
+                // .outOfGroup，这个区正好画在那个并集的正下方，天然落在判定范围内。
+                if isDraggingChildOf(node.id) {
+                    chunk.append(.outZone(parent: node.id))
                 }
                 topLevelChunks.append(chunk)
             } else {
@@ -496,8 +530,15 @@ struct PromptManagerView: View {
         case .group(let n): return isCollapsed(id: n.id, kind: .groupTitle)
         case .action(let n): return isCollapsed(id: n.id, kind: .action)
         case .child(let n, let parent): return isCollapsed(id: n.id, kind: .child(parent: parent))
-        case .gap: return false
+        case .gap, .outZone: return false
         }
+    }
+
+    /// 6d：拖的是不是「组 groupID 底下的某个子行」——驱动 editRows() 要不要在这个组下面
+    /// 挂「移到分组外」落点区。
+    private func isDraggingChildOf(_ groupID: String) -> Bool {
+        guard case .child(let parent) = editDrag?.kind else { return false }
+        return parent == groupID
     }
 
     /// `PromptDragEngine.dropIndex` 给出的 index 是"排除被拖（含折叠）元素后，插入到第几个
@@ -518,27 +559,51 @@ struct PromptManagerView: View {
             ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
                 if isGapRow(row) {
                     dropGapView
+                } else if case .outZone(let parent) = row {
+                    outZoneView(parent: parent)
                 } else {
                     let collapsed = isRowCollapsed(row)
-                    let isFirst = i == 0 || isGapRow(rows[i - 1])
-                    let isLast = i == rows.count - 1 || isGapRow(rows[i + 1])
+                    let armed = isArmedGroupRow(row)
+                    let isFirst = i == 0 || breaksCardContinuity(rows[i - 1])
+                    let isLast = i == rows.count - 1 || breaksCardContinuity(rows[i + 1])
+                    // 6d：展开的 folder 标题行底色变 #F7F2E9（底边线复用既有的 dividerInCard
+                    // 逻辑——展开时标题行后面跟着子行，isLast 天然是 false，下面那个既有的
+                    // .overlay(alignment:.bottom) 分隔线已经在画 F0E8DA，不用另起一份）。
+                    let rowBG = armed
+                        ? Color(hex: "FBF3E9")
+                        : (isExpandedGroupTitleRow(row) ? Color(hex: "F7F2E9") : Color.white)
                     editRowContent(row)
-                        .background(Color.white)
-                        .clipShape(cardCorner(isFirst: isFirst, isLast: isLast))
+                        .background(rowBG)
+                        .clipShape(armed ? AnyShape(RoundedRectangle(cornerRadius: 9)) : AnyShape(cardCorner(isFirst: isFirst, isLast: isLast)))
                         .overlay(alignment: .bottom) {
-                            if !isLast {
+                            if !isLast && !armed {
                                 Rectangle().fill(Theme.dividerInCard).frame(height: 1)
+                            }
+                        }
+                        // 6c：张口边框 1.5pt #D8A25B，圆角 9（bg/clipShape 已经在上面切到 9）。
+                        .overlay {
+                            if armed {
+                                RoundedRectangle(cornerRadius: 9).stroke(Color(hex: "D8A25B"), lineWidth: 1.5)
                             }
                         }
                         // 身份修复：被拖（或孤儿子）行留在树里，靠 0 高度 + clipped + opacity 0
                         // 视觉收起——"收拢"的布局效果不变，但视图身份/手势活着（见文件头长注释）。
                         .frame(height: collapsed ? 0 : nil)
                         .clipped()
-                        .opacity(collapsed ? 0 : 1)
+                        .opacity(rowOpacity(armed: armed, collapsed: collapsed))
+                        // 6c 外发光——放在 .clipped() 之后一层新的 overlay，不会被前面那次
+                        // clip 裁掉；4px 硬边环：stroke 宽 8、path 往外 padding(-4)，环正好
+                        // 从卡片边缘往外铺 4pt，读起来是 `0 0 0 4px rgba(216,162,91,0.18)`。
+                        .overlay {
+                            if armed {
+                                RoundedRectangle(cornerRadius: 9)
+                                    .stroke(Color(hex: "D8A25B").opacity(0.18), lineWidth: 8)
+                                    .padding(-4)
+                            }
+                        }
                 }
             }
         }
-        .opacity(editDrag == nil ? 1 : 0.9) // 6b：拖动中其余行 opacity 0.9
         .coordinateSpace(name: editCoordSpace)
         .overlay(alignment: .topLeading) { floatingDragOverlay }
         .onPreferenceChange(RowFramePreferenceKey.self) { rowFrames = $0 }
@@ -549,42 +614,92 @@ struct PromptManagerView: View {
         return false
     }
 
+    private func isOutZoneRow(_ row: EditRow) -> Bool {
+        if case .outZone = row { return true }
+        return false
+    }
+
+    private func isArmedGroupRow(_ row: EditRow) -> Bool {
+        if case .group(let n) = row { return armedGroupID == n.id }
+        return false
+    }
+
+    private func isExpandedGroupTitleRow(_ row: EditRow) -> Bool {
+        if case .group(let n) = row { return expandedGroups.contains(n.id) }
+        return false
+    }
+
+    /// 缝隙 / 落点区 / 张口的 folder 卡都是各自独立的一块——挨着它们的邻居不能被当成
+    /// 同一张卡的中间行（不然圆角/分隔线全乱）。isFirst/isLast 用这个替代原来的
+    /// `isGapRow` 单一判断。
+    private func breaksCardContinuity(_ row: EditRow) -> Bool {
+        isGapRow(row) || isOutZoneRow(row) || isArmedGroupRow(row)
+    }
+
+    /// 拖动进行中"其它行"的暗淡程度——6b 普通重排 0.9，6c 悬停张口时更暗 0.55（张口的
+    /// 那张 folder 卡自己例外，维持满不透明，让它更抢眼）；被拖/孤儿子行永远 0（0 高度
+    /// 折叠，见文件头长注释）；不在拖动中（editDrag == nil）永远 1。
+    private func rowOpacity(armed: Bool, collapsed: Bool) -> Double {
+        if collapsed { return 0 }
+        guard editDrag != nil else { return 1 }
+        if armed { return 1 }
+        return armedGroupID != nil ? 0.55 : 0.9
+    }
+
     @ViewBuilder
     private func editRowContent(_ row: EditRow) -> some View {
         switch row {
         case .group(let node): editGroupRow(node)
         case .action(let node): editActionRow(node)
         case .child(let node, let parent): editChildRow(node, parent: parent)
-        case .gap: EmptyView()
+        case .gap, .outZone: EmptyView()
         }
     }
 
     /// 6a：folder 默认收起（`enterReorder` 已把 `expandedGroups` 清空）——行 = 手柄 + folder
     /// 图标（30×30 `#F1ECE3`，图标 `#7A6E5C`）+ 名字 15 + 「N 项」12 `#b8ae9e` + ⌄ `#CFC6B6`。
-    /// 6d：点标题仍可展开/收起（组内调序在 Task 1 已可用，收纳/移出落点区留 Task 2）。
+    /// 6d：点标题仍可展开/收起（组内调序 + 展开态标题底色 Task 1/2 已可用）。
+    /// 6c：`armedGroupID == node.id`（悬停满 0.3s）→「张口」——图标块/图标/文案/尾部全套
+    /// 换掉（bg/border/圆角/外发光在 editList 那层统一画，这里只管内容本身）；「N 项」张口
+    /// 时也隐藏（不管展不展开）。
     private func editGroupRow(_ node: PromptNode) -> some View {
         let expanded = expandedGroups.contains(node.id)
+        let armed = armedGroupID == node.id
         return HStack(spacing: 12) {
             editHandle(active: editDrag?.id == node.id)
                 .frame(width: 30, height: 44)
                 .contentShape(Rectangle())
                 .gesture(dragGesture(for: node.id, kind: .groupTitle, label: node.label, symbol: "folder"))
             RoundedRectangle(cornerRadius: Theme.R.promptEditTile)
-                .fill(Theme.tileNeutral)
+                .fill(armed ? Color(hex: "F6EBD6") : Theme.tileNeutral)
                 .frame(width: 30, height: 30)
-                .overlay(Image(systemName: "folder").font(.system(size: 13)).foregroundStyle(Color(hex: "7A6E5C")))
-            Text(node.label).font(.system(size: 15)).foregroundStyle(Theme.ink)
-            Spacer(minLength: 8)
-            if !expanded {
-                Text("\(node.children?.count ?? 0) 项")
-                    .font(.system(size: 12)).foregroundStyle(Color(hex: "b8ae9e"))
+                .overlay(
+                    Image(systemName: armed ? "folder.badge.plus" : "folder")
+                        .font(.system(size: 13))
+                        .foregroundStyle(armed ? Color(hex: "C98A2E") : Color(hex: "7A6E5C"))
+                )
+            if armed {
+                Text("放进「\(node.label)」")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color(hex: "B98A3E"))
+            } else {
+                Text(node.label).font(.system(size: 15)).foregroundStyle(Theme.ink)
             }
-            Image(systemName: "chevron.down")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color(hex: "CFC6B6"))
-                .rotationEffect(.degrees(expanded ? 180 : 0))
+            Spacer(minLength: 8)
+            if armed {
+                Text("松手收纳").font(.system(size: 12)).foregroundStyle(Color(hex: "C98A2E"))
+            } else {
+                if !expanded {
+                    Text("\(node.children?.count ?? 0) 项")
+                        .font(.system(size: 12)).foregroundStyle(Color(hex: "b8ae9e"))
+                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color(hex: "CFC6B6"))
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
+            }
         }
-        .padding(.vertical, 12).padding(.horizontal, 15)
+        .padding(.vertical, armed ? 13 : 12).padding(.horizontal, 15)
         .contentShape(Rectangle())
         .onTapGesture {
             withAnimation(.easeInOut(duration: 0.18)) {
@@ -610,9 +725,8 @@ struct PromptManagerView: View {
     }
 
     /// 6d：组内行——缩进 30、图标 26×26/圆角 6、名字 14.5，自带 ≡ 手柄。组内互相调序走同一套
-    /// `PromptDragEngine`（scope `.group`），Task 1 已完整可用；拖进/挪出组的落点视觉
-    /// （6c 张口 + 6d「移到分组外」）是 Task 2 的活——这里手指越出组边界只是不落地，
-    /// 松手行弹回原位（`commitDrag` 对 `.intoGroup`/`.outOfGroup` 是 no-op，标了 `// Task 2`）。
+    /// `PromptDragEngine`（scope `.group`），Task 1 已完整可用；拖出组边界落地到「移到分组外」
+    /// 落点区（6d）/ 拖进另一个 folder 的张口收纳（6c）见 `commitDrag`/`editGroupRow`。
     private func editChildRow(_ node: PromptNode, parent: String) -> some View {
         HStack(spacing: 10) {
             editHandle(active: editDrag?.id == node.id)
@@ -659,12 +773,31 @@ struct PromptManagerView: View {
             .transition(.opacity)
     }
 
+    /// 6d：拖组内行时，folder 卡下方常驻的「移到分组外」落点区——同 `dropGapView` 的框线
+    /// 打扮（高 44、1.5pt dashed `#D8A25B`、圆角 8、底 `#FBF3E9`），多一行居中文案。命中判定
+    /// 见 `editRows()` 里 `isDraggingChildOf` 旁的注释——不需要单独发布 RowFrame。
+    private func outZoneView(parent: String) -> some View {
+        RoundedRectangle(cornerRadius: 8)
+            .strokeBorder(Color(hex: "D8A25B"), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+            .background(Color(hex: "FBF3E9"), in: RoundedRectangle(cornerRadius: 8))
+            .frame(height: 44)
+            .overlay(
+                Text("移到分组外").font(.system(size: 12)).foregroundStyle(Color(hex: "C98A2E"))
+            )
+            .padding(.vertical, 5)
+            .padding(.horizontal, 10)
+            .transition(.opacity)
+    }
+
     /// 6b：浮起行跟手——scale(1.03)、投影 `0 14 30 rgba(60,48,30,0.26)`、边 1px `#EBD9B8`、
     /// 圆角 9、手柄 `#D8A25B`、名字 semibold。位置 = 起点帧中心 + 手指位移（不是直接贴手指，
     /// 保持抓取点相对行的位置不跳）。
+    /// 6c：`armedGroupID != nil`（悬停张口中）时加码——`scale(1.04) rotate(-1°)`、投影加深到
+    /// `0 16 32 rgba(60,48,30,0.28)`（CSS blur→SwiftUI radius 沿用本文件既有换算：radius = blur/2）。
     @ViewBuilder
     private var floatingDragOverlay: some View {
         if let d = editDrag {
+            let armed = armedGroupID != nil
             HStack(spacing: 12) {
                 editHandle(active: true).frame(width: 30, height: 44)
                 iconTile(bg: Theme.tileNeutral, symbol: d.symbol, fg: Theme.secondary)
@@ -675,8 +808,12 @@ struct PromptManagerView: View {
             .frame(width: d.originFrame.width, height: d.originFrame.height, alignment: .leading)
             .background(Color.white, in: RoundedRectangle(cornerRadius: 9))
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color(hex: "EBD9B8"), lineWidth: 1))
-            .shadow(color: Color(.sRGB, red: 60 / 255, green: 48 / 255, blue: 30 / 255, opacity: 0.26), radius: 15, x: 0, y: 14)
-            .scaleEffect(1.03)
+            .shadow(
+                color: Color(.sRGB, red: 60 / 255, green: 48 / 255, blue: 30 / 255, opacity: armed ? 0.28 : 0.26),
+                radius: armed ? 16 : 15, x: 0, y: armed ? 16 : 14
+            )
+            .scaleEffect(armed ? 1.04 : 1.03)
+            .rotationEffect(.degrees(armed ? -1 : 0))
             .position(x: d.originFrame.midX, y: d.originFrame.midY + d.translation.height)
             .allowsHitTesting(false)
         }
@@ -718,21 +855,64 @@ struct PromptManagerView: View {
     private func recomputeDropTarget() {
         guard let d = editDrag else { return }
         let target = PromptDragEngine.dropIndex(fingerY: d.fingerY, rows: rowFrames, draggedID: d.id, draggedKind: d.kind, items: draft)
+        updateHoverDwell(rawTarget: target)
         guard target != dropTarget else { return }
         withAnimation(.easeOut(duration: 0.15)) { dropTarget = target }
     }
 
+    /// 6c：0.3s 悬停判定——view-only 的可取消 `Task.sleep` 计时（未落成可单测的纯逻辑，见
+    /// task-2-report.md「dwell 状态机」一节，手测覆盖）。candidate（`dropIndex` 原始输出若是
+    /// `.intoGroup(id)` 就是那个 folder id，否则 nil）没变什么都不做——同一个 folder 上继续
+    /// 悬停/手指微抖不能重启计时，否则永远攒不够 0.3s。candidate 变了：① 取消上一次还没跑完
+    /// 的计时；② `armedGroupID` 若不等于新 candidate 立刻清掉（张口收起，`.intoGroup` 换了目标
+    /// 或手指离开了所有标题都要立刻复位）；③ 新 candidate 非 nil 才重新起一个 0.3s 计时，到点
+    /// 检查 `hoverCandidateID` 没变过再真的把 `armedGroupID` 设成它——防"计时跑到一半手指已经
+    /// 挪到别处但 Task 还是按老 candidate 生效"的竞态。
+    private func updateHoverDwell(rawTarget: DropTarget) {
+        let candidate: String? = {
+            if case .intoGroup(let id) = rawTarget { return id }
+            return nil
+        }()
+        guard candidate != hoverCandidateID else { return }
+        hoverCandidateID = candidate
+        hoverDwellTask?.cancel()
+        hoverDwellTask = nil
+        if armedGroupID != candidate {
+            withAnimation(.easeOut(duration: 0.15)) { armedGroupID = nil }
+        }
+        guard let candidate else { return }
+        hoverDwellTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            guard hoverCandidateID == candidate else { return }
+            withAnimation(.easeOut(duration: 0.15)) { armedGroupID = candidate }
+        }
+    }
+
     private func commitDrag() {
         guard let d = editDrag else { return }
-        if case .reorder = dropTarget, let moved = PromptDragEngine.apply(dropTarget, draggedID: d.id, items: draft) {
+        if let groupID = armedGroupID {
+            // 6c：只有连续悬停满 0.3s（张口）才真的收进去——没到点松手 `armedGroupID` 还是
+            // nil，走不到这条分支，等同 `.none`，行弹回原位（哪怕这一刻引擎的原始 dropTarget
+            // 恰好还是 `.intoGroup`，也不认）。
+            if let moved = PromptDragEngine.apply(.intoGroup(id: groupID), draggedID: d.id, items: draft) {
+                draft = moved
+            }
+        } else if case .outOfGroup = dropTarget, let moved = PromptDragEngine.apply(dropTarget, draggedID: d.id, items: draft) {
+            draft = moved
+        } else if case .reorder = dropTarget, let moved = PromptDragEngine.apply(dropTarget, draggedID: d.id, items: draft) {
             draft = moved
         }
-        // .intoGroup / .outOfGroup / .none：Task 1 阶段松手不落地（Task 2 接 6c 张口收纳 +
-        // 6d「移到分组外」落点区的视觉与落地）。
+        // 其余情况（含未到 0.3s 的 intoGroup 候选、组内行放回自己父组标题的 .none）：不落地，
+        // 行弹回原位。
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        hoverDwellTask?.cancel()
+        hoverDwellTask = nil
+        hoverCandidateID = nil
         withAnimation(.easeOut(duration: 0.15)) {
             editDrag = nil
             dropTarget = .none
+            armedGroupID = nil
         }
     }
 
@@ -746,6 +926,10 @@ struct PromptManagerView: View {
         expandedGroups = [] // 6a：进编辑态 folder 默认全部收起
         editDrag = nil
         dropTarget = .none
+        hoverDwellTask?.cancel()
+        hoverDwellTask = nil
+        hoverCandidateID = nil
+        armedGroupID = nil
         reordering = true
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
@@ -763,6 +947,10 @@ struct PromptManagerView: View {
         expandedGroups = savedExpandedGroups
         editDrag = nil
         dropTarget = .none
+        hoverDwellTask?.cancel()
+        hoverDwellTask = nil
+        hoverCandidateID = nil
+        armedGroupID = nil
         reordering = false
     }
 
@@ -781,6 +969,10 @@ struct PromptManagerView: View {
                 expandedGroups = savedExpandedGroups
                 editDrag = nil
                 dropTarget = .none
+                hoverDwellTask?.cancel()
+                hoverDwellTask = nil
+                hoverCandidateID = nil
+                armedGroupID = nil
                 reordering = false
             }
         }
@@ -924,12 +1116,14 @@ private struct EditDragState {
     var fingerY: CGFloat = 0
 }
 
-/// 编辑态渲染用的行——比 `PromptNode` 多一个 `.gap`（当前落点的琥珀虚线缝隙占位）。
+/// 编辑态渲染用的行——比 `PromptNode` 多两个伪行：`.gap`（当前落点的琥珀虚线缝隙占位，6b）、
+/// `.outZone(parent:)`（拖组内行时该组卡片下方常驻的「移到分组外」落点区，6d）。
 private enum EditRow: Identifiable {
     case group(PromptNode)
     case action(PromptNode)
     case child(PromptNode, parent: String)
     case gap
+    case outZone(parent: String)
 
     var id: String {
         switch self {
@@ -937,6 +1131,7 @@ private enum EditRow: Identifiable {
         case .action(let n): return n.id
         case .child(let n, _): return n.id
         case .gap: return "‹gap›" // 同一时刻至多一个缝隙，固定 id 足够
+        case .outZone(let parent): return "‹outzone:\(parent)›"
         }
     }
 }
