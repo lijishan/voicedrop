@@ -1,25 +1,32 @@
 # VoiceDrop — project state (read this first)
 
-Last updated: 2026-07-14（键盘精修已 revert）
+Last updated: 2026-07-14（键盘精修 v2 已上 main，v1 曾整体 revert）
 
-## ⚠️ 已撤销：键盘精修（长按段落就地编辑，2026-07-14 当天上线当天 revert）
+## 键盘精修 v2：长按菜单「编辑」→ 原位编辑（2026-07-14，用户拍板重做后上线）
 
-按 `~/Downloads/design_handoff_paragraph_edit` 方向 1a 做的 inline 段落键盘编辑
-（长按菜单「编辑」→ 段落变输入框 → UITextView tap-to-caret + inputAccessoryView）
-经 PR #9 合入、TestFlight build 241 发出后，用户真机实测**错误百出，整体 revert**
-（revert commit `50bd5b0`，触发了新的 TestFlight 构建顶掉 241）。
-**没有逐条排查具体 bug**——用户直接拍板撤销，具体哪里坏的没有记录。
+v1（PR #9 / commit `cc13560`）真机错误百出当天 revert（`50bd5b0`）后，用户明确
+要求按新约束重做：**长按的所有 behavior 不变；编辑全程排版零变化；编辑完恢复
+阅读态**。v2 实现（`InlineParagraphEditor.swift` + RecordingDetailView 最小改动）：
 
-- 别在没有用户明确要求时重新引入这个功能。
-- 如果重做：完整实现和调研结论存档在被 revert 的 commit `cc13560`（分支
-  `worktree-voicedrop+paragraph-edit-1a` 仍在 origin 上）和
-  `~/code/jianshuo-memory/08-infrastructure/voicedrop-paragraph-keyboard-edit.md`。
-  其中仍然有效的服务端结论：`PUT /files/api/articles/<stem>`（writeArticleDoc）
-  是不经 LLM、自动铸版本的通用写入口；客户端 `ArticleDoc` 模型没建模
-  `schema`/`status`/`model` 等字段，整 struct 重编码回传会丢字段，必须在原始
-  JSON dict 上只 merge 要改的 key。
-- 教训与 2026-07-12「实时预览 UI 已撤销」同款：自绘手势 + UIKit 桥接的交互，
-  模拟器/单测全绿≠能用，**必须真机手测过再合并发 TestFlight**，不要合并后等用户当小白鼠。
+- **入口**：长按菜单 localRows「拷贝」下面加「编辑」。长按手势本身一行没动
+  （v1 的教训：为拿触点坐标改成 sequenced 手势，菜单从「按住即弹」变成
+  「松手才弹」——这就是行为回归，别再犯）。
+- **排版零变化**：无描边框/出血/内边距/淡出；UITextView 与只读 Text 逐项对齐
+  （16pt / lineSpacing 9 / 零 inset / 同色），`sizeThatFits` 按提议宽度自适应；
+  编辑态顶栏「取消/完成」frame 锁 40pt 与平时工具栏同高。只有目标段被键盘盖住
+  时才 `scrollTo(anchor: nil)` 最小滚动。
+- **光标**：不做「落在长按点」（v1 的坐标换算是 bug 之源）；光标落段尾，
+  点哪儿改哪儿全走 UITextView 原生行为。
+- **数据层**（沿用 v1 已验证部分）：`ArticleBody.replacingLine` 按 bodyRows
+  同一套「文字游程+图片标记各占一行」切分精确替换单行；`LibraryStore.saveArticles`
+  现拉服务端原始 JSON 只 merge `articles` 一个 key 再 PUT（`ArticleDoc` 没建模
+  `schema`/`status`/`model` 等字段，整 struct 重编码回传会冲掉它们——所有对
+  `PUT /articles/<stem>` 的部分更新都必须走这个套路）；该端点不经 LLM、自动铸
+  版本，undo/redo 天然可用。单测 `ArticleBodyLineReplaceTests`（9 例）。
+- 编辑中锁交互：长按文字/图片菜单不弹、章节 chips `allowsHitTesting(false)`、
+  说话条隐藏（退出恢复）。
+- 教训存档（与 2026-07-12「实时预览 UI 已撤销」同款）：自绘手势 + UIKit 桥接的
+  交互，模拟器/单测全绿≠能用，**必须真机手测过再发**。v2 经用户本地验证后才 push。
 
 ## 性能改造第二轮（2026-07-13，API 速度体检后落地）
 

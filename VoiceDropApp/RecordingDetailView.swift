@@ -54,6 +54,12 @@ struct RecordingDetailView: View {
     @State private var restyling = false         // /agent/restyle in flight
     @State private var lpMenu: LongpressPresentation?   // 长按操作菜单（自绘覆盖层）
 
+    // 键盘精修 v2：长按菜单「编辑」→ 该段原位变成可编辑（排版零变化，见
+    // InlineParagraphEditor.swift 顶部的三条铁律）。editingLine == nil 即平时阅读态。
+    @State private var editingLine: Int?
+    @State private var editingDraft = ""
+    @State private var editingOriginalText = ""
+
     // Undo/redo: versions (oldest-first) + head loaded on open and refreshed after
     // each agent edit. Undo/redo move head locally for instant UI update, then
     // fire an async PATCH to sync the server pointer (no new version written).
@@ -169,7 +175,8 @@ struct RecordingDetailView: View {
         .background(Theme.readBG.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .bottom) {
-            if !articles.isEmpty { bottomBar }
+            // 键盘精修态：说话条隐藏（那块屏幕被键盘占了），退出编辑即恢复。
+            if !articles.isEmpty && editingLine == nil { bottomBar }
         }
         .overlay(alignment: .bottom) { toastView }
         .overlay { if restyling { restylingOverlay } }
@@ -407,15 +414,28 @@ struct RecordingDetailView: View {
     /// 不再要求先 push-to-talk 才出现。
     private var navBar: some View {
         HStack {
-            NavSquare(systemName: "chevron.left", stroke: Theme.inkRead, border: Theme.borderRead) { dismiss() }
-                .accessibilityLabel("返回")
-            Spacer()
-            if !articles.isEmpty {
-                HStack(spacing: 10) {
-                    navPlayButton
-                    insertPhotoButton
-                    if versions.count > 1 { undoRedoGroup }   // 直接出现，无动画
-                    moreMenu   // ⋯ 常驻
+            if editingLine != nil {
+                // 键盘精修态：左「取消」右「完成」，替换整条工具栏（顺带挡住了
+                // 编辑中途点播放/撤销/⋯ 造成的状态交叉）。frame(height: 40) 与
+                // 平时的 navPlayButton 同高——顶栏高度不变，正文一个像素都不动。
+                Button(String(localized: "取消")) { cancelEdit() }
+                    .font(.system(size: 15)).foregroundStyle(Theme.secondary)
+                    .frame(height: 40)
+                Spacer()
+                Button(String(localized: "完成")) { commitEdit() }
+                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
+                    .frame(height: 40)
+            } else {
+                NavSquare(systemName: "chevron.left", stroke: Theme.inkRead, border: Theme.borderRead) { dismiss() }
+                    .accessibilityLabel("返回")
+                Spacer()
+                if !articles.isEmpty {
+                    HStack(spacing: 10) {
+                        navPlayButton
+                        insertPhotoButton
+                        if versions.count > 1 { undoRedoGroup }   // 直接出现，无动画
+                        moreMenu   // ⋯ 常驻
+                    }
                 }
             }
         }
@@ -652,6 +672,7 @@ struct RecordingDetailView: View {
 
     private var articlePane: some View {
         // 整条播放条已收进顶部播放键，正文直接上移、阅读区更大。
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if let a = articles[safe: articleIndex] {
@@ -670,7 +691,9 @@ struct RecordingDetailView: View {
                     }
                     .padding(.top, 8)
 
-                    if articles.count > 1 { chipRow.padding(.top, 16) }
+                    // 编辑态锁住章节 chips（切文章会让 editingLine 指错篇）；
+                    // allowsHitTesting 不改外观，排版零变化。
+                    if articles.count > 1 { chipRow.padding(.top, 16).allowsHitTesting(editingLine == nil) }
 
                     articleBody(a).padding(.top, articles.count > 1 ? 16 : 20)
                 }
@@ -688,6 +711,18 @@ struct RecordingDetailView: View {
                 withAnimation(.easeInOut(duration: 0.3)) { followup.sheet = .collapsed }
             }
         })
+        // 键盘精修：键盘升起后若目标段被键盘盖住，做一次「最小滚动」露出它
+        // （anchor: nil = 已可见就一动不动；只有确实被盖住才挪最少的距离）。
+        // 延迟到键盘动画结束后再判断，避免和键盘 avoidance 打架。
+        .onChange(of: editingLine) { _, line in
+            guard let line else { return }
+            Task {
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                guard editingLine == line else { return }
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("p\(line)", anchor: nil) }
+            }
+        }
+        }
     }
 
     /// One rendered row of the body: a numbered text paragraph, or a numbered image.
@@ -768,24 +803,32 @@ struct RecordingDetailView: View {
             ForEach(bodyRows(a)) { row in
                 switch row {
                 case .paragraph(let n, let text):
-                    // 长按出操作菜单（自绘覆盖层）——为此取消了 .textSelection（长按
-                    // 选择与菜单手势冲突），菜单尾部的本地「拷贝」项补偿。
-                    Text(textAttributed(text))
-                        .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
-                        .lineSpacing(9)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        // 刚落地的编辑改过的行：荧光笔高亮几秒后淡出。
-                        .background((highlightLines[articleIndex]?.contains(n) ?? false) ? Theme.fuHighlight : .clear,
-                                    in: RoundedRectangle(cornerRadius: 4))
-                        .overlay {
-                            GeometryReader { geo in
-                                Color.clear.contentShape(Rectangle())
-                                    .onLongPressGesture(minimumDuration: 0.35) {
-                                        presentTextMenu(line: n, text: text, frame: geo.frame(in: .global))
-                                    }
+                    if editingLine == n {
+                        // 键盘精修：这一段原位换成可编辑视图。字体/行距/宽度与下面的
+                        // 只读 Text 逐项对齐（InlineParagraphEditor 内），无框无边距，
+                        // 切换瞬间排版零变化。
+                        InlineParagraphEditor(text: $editingDraft, onDone: commitEdit)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        // 长按出操作菜单（自绘覆盖层）——为此取消了 .textSelection（长按
+                        // 选择与菜单手势冲突），菜单尾部的本地「拷贝/编辑」项补偿。
+                        Text(textAttributed(text))
+                            .font(.system(size: 16)).foregroundStyle(Theme.bodyRead)
+                            .lineSpacing(9)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            // 刚落地的编辑改过的行：荧光笔高亮几秒后淡出。
+                            .background((highlightLines[articleIndex]?.contains(n) ?? false) ? Theme.fuHighlight : .clear,
+                                        in: RoundedRectangle(cornerRadius: 4))
+                            .overlay {
+                                GeometryReader { geo in
+                                    Color.clear.contentShape(Rectangle())
+                                        .onLongPressGesture(minimumDuration: 0.35) {
+                                            presentTextMenu(line: n, text: text, frame: geo.frame(in: .global))
+                                        }
+                                }
                             }
-                        }
-                        .overlay(alignment: .topLeading) { lineNumber(n, visible: editing) }
+                            .overlay(alignment: .topLeading) { lineNumber(n, visible: editing) }
+                    }
                 case .image(let n, let m, let key):
                     PhotoTile(store: store, relKey: key,
                               onLongPress: { img, frame in presentImageMenu(img, relKey: key, frame: frame) })
@@ -801,20 +844,75 @@ struct RecordingDetailView: View {
     /// （拷贝不进服务端配置、不走网络）。点选把成品指令交给现有语音编辑队列——
     /// 与口述/插入照片同一入口，排队、串行、「正在改」指示全部复用。
     private func presentTextMenu(line: Int, text: String, frame: CGRect) {
+        guard editingLine == nil else { return }   // 编辑中不再叠一层菜单
         let menu = PromptStore.shared.menuConfig(for: .text)
         withAnimation(.easeOut(duration: 0.15)) {
             lpMenu = LongpressPresentation(
                 anchor: .text(text), frame: frame, menu: menu,
                 fill: { UIMenuConfig.fill($0, ["LINE": String(line), "QUOTE": Self.quotePrefix(text)]) },
                 onPick: { agent.enqueue($0, articleIndex: articleIndex) },
-                localRows: [LongpressLocalRow(label: String(localized: "拷贝"), systemImage: "doc.on.doc",
-                                              action: { UIPasteboard.general.string = text })]
+                localRows: [
+                    LongpressLocalRow(label: String(localized: "拷贝"), systemImage: "doc.on.doc",
+                                      action: { UIPasteboard.general.string = text }),
+                    LongpressLocalRow(label: String(localized: "编辑"), systemImage: "pencil",
+                                      action: { [self] in startInlineEdit(line: line, text: text) }),
+                ]
             )
         }
     }
 
+    // MARK: 键盘精修（v2，长按菜单「编辑」入口）
+
+    /// 进入编辑：这一段原位变成 InlineParagraphEditor，其余一切保持原样。
+    private func startInlineEdit(line: Int, text: String) {
+        editingOriginalText = text
+        editingDraft = text
+        editingLine = line   // 不加动画——切换本身就该无感（排版零变化）
+    }
+
+    /// 顶栏「完成」/ 键盘回车：写回该段。空结果或没改动一律当无操作退出
+    /// （这条精修路径不负责删段）。
+    private func commitEdit() {
+        guard let line = editingLine else { return }
+        editingLine = nil
+        guard let a = articles[safe: articleIndex] else { return }
+        let trimmed = editingDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != editingOriginalText else { return }
+        let newBody = ArticleBody.replacingLine(line, with: trimmed, in: a.body)
+        guard newBody != a.body else { return }
+        var newArticles = articles
+        newArticles[articleIndex] = MinedArticle(title: a.title, body: newBody, style: a.style, wechatMediaId: a.wechatMediaId)
+        let oldArticles = articles
+        applyLocalArticles(newArticles)
+        flashChanges(from: oldArticles, to: newArticles)
+        Task {
+            let ok = await store.saveArticles(recording, articles: newArticles)
+            if ok {
+                await loadVersionHistory()
+            } else {
+                showToast(String(localized: "保存失败，请重试"))
+            }
+        }
+    }
+
+    /// 顶栏「取消」：丢弃草稿、回到阅读态，原文一个字不动。
+    private func cancelEdit() {
+        editingLine = nil
+    }
+
+    /// 乐观本地刷新：只换 articles，doc 其余字段原样保留（与 applyVersion 同一模式）。
+    /// 真正落盘走 store.saveArticles（对服务器原始 JSON 做 merge，见其注释）。
+    private func applyLocalArticles(_ newArticles: [MinedArticle]) {
+        guard let current = doc else { return }
+        doc = ArticleDoc(id: current.id, sourceAudio: current.sourceAudio, createdAt: current.createdAt,
+                         transcript: current.transcript, srt: current.srt, articles: newArticles,
+                         tags: current.tags, questions: current.questions, photos: current.photos,
+                         title: current.title, body: current.body)
+    }
+
     /// 长按已出图的配图 → 自绘操作菜单（图片风格）。{{KEY}} 在这里换成该图 relKey。
     private func presentImageMenu(_ img: UIImage, relKey: String, frame: CGRect) {
+        guard editingLine == nil else { return }   // 编辑中不弹图片菜单
         let menu = PromptStore.shared.menuConfig(for: .image)
         withAnimation(.easeOut(duration: 0.15)) {
             lpMenu = LongpressPresentation(
