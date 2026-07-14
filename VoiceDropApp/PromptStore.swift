@@ -14,7 +14,7 @@ struct PromptError: Error, Equatable {
 
 /// 服务端 resolved 节点（`GET /agent/prompts` 的 items 数组元素）。
 /// 未知字段（如 `imageParams`）不声明 = Codable 自动忽略，不炸解码。
-struct PromptNode: Codable, Identifiable, Equatable, Hashable {
+struct PromptNode: Codable, Identifiable, Equatable, Hashable, Sendable {
     var id: String
     var type: String            // "action" | "group"
     var label: String
