@@ -3,6 +3,13 @@
 设计稿：`design_handoff_prompt_manager/`（`Prompt Manager.dc.html`，定稿 = 第 5 轮 5a/5b/5c + 第 4 轮 4a/4b + 1b/1d/1a）
 日期：2026-07-13
 
+> **2026-07-14 修订（第 6 轮设计 6a–6d）**：拖动排序/分组的交互由第 6 轮**整体取代** 1d 的视觉语法
+> （handoff `design_handoff_prompt_manager 2/`）。Phase 2 Task 7 用原生 `onMove`/`editMode` 实现的
+> 排序模式（系统尾部手柄、无落点视觉、拖出=左滑）作废，换自定义拖拽：**≡ 左手柄发起 + 拖起行
+> 1.03 抬起投影 + 琥珀虚线落点缝隙 + folder 悬停 0.3s 张口收纳 + 「移到分组外」落点区**。
+> 编辑态下 folder 默认收起、行右尖角与标全部隐藏、返回键隐藏、＋ 换成「完成」。
+> 详细交互契约见 plan `2026-07-14-prompt-manager-drag-6a6d.md`。
+
 ---
 
 ## 1. 为什么重构
