@@ -699,6 +699,9 @@ struct PromptManagerView: View {
         .padding(.vertical, armed ? 13 : 12).padding(.horizontal, 15)
         .contentShape(Rectangle())
         .onTapGesture {
+            // 拖拽进行中禁止展开/收起：第二根手指点收被拖子行的父组，会把被拖行从
+            // ForEach 里移掉——正是 16fce7e 修掉的「手势中途视图身份死亡」经此复活。
+            guard editDrag == nil else { return }
             withAnimation(.easeInOut(duration: 0.18)) {
                 if expanded { expandedGroups.remove(node.id) } else { expandedGroups.insert(node.id) }
             }
