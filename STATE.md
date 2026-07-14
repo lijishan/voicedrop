@@ -108,7 +108,29 @@ plan = `docs/superpowers/plans/2026-07-13-prompt-manager-phase1-server.md`。
 - 对抗性 review 全程抓出 **12 个真实缺陷**（校验器可被 5MB 载荷打穿/会 throw 成 500、恢复默认重复
   补条目/超 200 上限、匿名作者显示成机器码等），全部修复 + 回归测试。计划文档已同步修正。
 
-### Phase 2（iOS）——代码已完成（2026-07-14），**未发版**：等 PR #24 先合并部署
+### Phase 2（iOS）——已上线（2026-07-14）：PR #24 已合并部署（worker `97c94d38`），iOS 合 main 后经 workflow_dispatch 发 **TestFlight build 99**
+
+> ⚠️ 发版规矩（2026-07-09 起）：**push main 不会自动发 TestFlight**——commit message 带 `[tf]`
+> 或 `gh workflow run build.yml -f destination=testflight` 才上传（苹果 ~20 包/24h 限额）。CI 绿 ≠ 出包。
+
+### 第 6 轮拖拽（6a–6d）——分支 `prompt-drag-6a6d`，2026-07-14
+
+handoff `design_handoff_prompt_manager 2/`。Phase 2 Task 7 的原生 `onMove` 排序**作废**，换全自定义拖拽：
+
+- **`PromptDragEngine.swift`（新）**：纯几何逻辑（无 SwiftUI），`RowFrame`/`DropTarget`/`Scope`；
+  `dropIndex`（手指 Y + 行帧 → 落点：同域排序 / `.intoGroup` / `.outOfGroup`）+ `apply`（落地，
+  委托 `PromptLogic.moving*`）。24 个单测（含嵌套源不重复、两级封顶双保险、空组/边界）。
+- **编辑态**（`PromptManagerView.swift` 重构）：普通态仍是 List（左滑删除等全保留）；编辑态换
+  ScrollView+VStack——行帧经 PreferenceKey 收集（named coordinate space），**≡ 左手柄是唯一拖动
+  发起点**（`DragGesture` 挂手柄上），拖起行画在 overlay 跟手（1.03 + 抬起投影；悬停 folder 加码
+  1.04 + rotate -1°）。落点 = 44pt 琥珀虚线缝隙。folder 悬停 **0.3s** 张口（`#FBF3E9` 底 + `#D8A25B`
+  边 + 4px 外发光环 + 图标变 `folder.badge.plus` + 「放进「X」」「松手收纳」）；拖组内行时 folder 卡
+  下方出「移到分组外」落点区（接受域 = 组跨度之外任意处，落点=folder 之后——比设计字面更宽容，有意）。
+- **手势生命周期**（review 抓的坑）：拖动中源行**高度塌 0 但保留视图身份**（从 ForEach 移除会杀死
+  进行中的手势 → 浮层卡死）；换行拖动有 takeover guard；scenePhase 离开 active 强制复位。
+- **known trade**：无拖动自动滚屏（列表典型 15 行，200 封顶）；dwell 计时在 View 层（Task.sleep，
+  计划许可）；真机 QA 必测项=组内排序/收纳/拖出全链路 + 0.3s 手感。
+- 数据层零改动（draft + 整树 PUT + baseline 冲突检查全复用），服务端零变更。
 
 spec = `docs/superpowers/specs/2026-07-13-prompt-manager-redesign.md` §9，plan =
 `docs/superpowers/plans/2026-07-14-prompt-manager-phase2-ios.md`（分 8 个 task，TDD，
