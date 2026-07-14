@@ -38,7 +38,7 @@ class AudioRecorder(private val context: Context) {
             isRecording = true
             return true
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("AudioRecorder", "start failed", e)
             return false
         }
     }

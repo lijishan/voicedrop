@@ -103,13 +103,16 @@ enum class BlockReason { noCredit, tooLong }
 
 data class CommunityPost(
     val shareId: String,
-    val author: String,
+    val author: String = "",
     val title: String? = null,
     val firstSharedAt: Any? = null,
     val updatedAt: Any? = null,
     val count: Int? = null,
     val mine: Boolean = false,
     val replyTo: Any? = null,
+    val hasPhoto: Boolean = false,
+    val coverPhotoKey: String? = null,
+    val preview: String? = null,
 )
 
 data class CommunityFullPost(
@@ -185,6 +188,19 @@ data class WSMessage(
 
 // --- UI Config ---
 
+data class MenuNode(
+    val id: String,
+    val label: String,
+    val type: String? = null,
+    val children: List<MenuNode>? = null,
+    val instruction: String? = null,
+)
+
+data class LongPressConfig(
+    val image: List<MenuNode>? = null,
+    val text: List<MenuNode>? = null,
+)
+
 data class UIConfig(
     val schema: Int? = null,
     val pages: Map<String, UIPageConfig>? = null,
@@ -192,16 +208,6 @@ data class UIConfig(
 
 data class UIPageConfig(
     val longpress: LongPressConfig? = null,
-)
-
-data class LongPressConfig(
-    val image: List<MenuAction>? = null,
-    val text: List<MenuAction>? = null,
-)
-
-data class MenuAction(
-    val label: String,
-    val instruction: String,
 )
 
 // --- WeChat Publish ---
@@ -223,6 +229,13 @@ data class WhoAmI(
 // --- Community list response wrapper ---
 
 data class CommunityListResp(val posts: List<CommunityPost>)
+
+data class CommunityFeedResp(
+    val posts: List<CommunityPost>,
+    val likes: Map<String, Int>? = null,
+    val replies: Map<String, Int>? = null,
+    val mineLikes: List<String>? = null,
+)
 
 // --- API generic responses ---
 

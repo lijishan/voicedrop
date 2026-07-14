@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.util.Log
+import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 
 class RealtimeInterviewer(
@@ -20,6 +21,7 @@ class RealtimeInterviewer(
 
     private var audioTrack: AudioTrack? = null
     private var turnCount = 0
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
 
     init {
         session.onAudioDelta = { pcm -> playAIAudio(pcm) }
@@ -27,26 +29,29 @@ class RealtimeInterviewer(
         session.onSpeechStopped = { aiSpeaking.set(false) }
         session.onResponseDone = {
             aiSpeaking.set(false)
-            Thread { Thread.sleep(300); uplinkMuted.set(false) }.start()
+            scope.launch {
+                kotlinx.coroutines.delay(300)
+                uplinkMuted.set(false)
+            }
         }
         session.onStateChange = { Log.d("RealtimeInterviewer", "state: $it") }
 
-            engine.onPCM = { pcm ->
-                if (_interviewActive && !aiSpeaking.get() && !uplinkMuted.get()) {
-                    session.sendAudio(pcm)
-                }
+        engine.onPCM = { pcm ->
+            if (_interviewActive && !aiSpeaking.get() && !uplinkMuted.get()) {
+                session.sendAudio(pcm)
             }
+        }
     }
 
     fun toggleInterview() {
-            if (!_interviewActive) {
-                _interviewActive = true
+        if (!_interviewActive) {
+            _interviewActive = true
             turnCount++
             session.connect()
             if (!engine.isRec) engine.start()
             Log.d("RealtimeInterviewer", "interview on")
-            } else {
-                _interviewActive = false
+        } else {
+            _interviewActive = false
             uplinkMuted.set(true)
             session.disconnect()
             Log.d("RealtimeInterviewer", "interview off")
@@ -71,6 +76,7 @@ class RealtimeInterviewer(
         _interviewActive = false
         session.disconnect()
         engine.stop()
+        scope.cancel()
         try { audioTrack?.stop(); audioTrack?.release() } catch (_: Exception) {}
         audioTrack = null
     }

@@ -8,6 +8,7 @@
     <string name="hint_start_recording">按下底部红键开始录音</string>
     <string name="hint_refresh">按下底部红键开始录音，或点顶部↻刷新</string>
     <string name="tap_to_record">轻点录音</string>
+    <string name="pull_to_refresh">下拉刷新</string>
 
     <!-- Recording status -->
     <string name="status_no_credit">余额不足</string>

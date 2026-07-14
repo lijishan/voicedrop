@@ -1,5 +1,27 @@
 # VoiceDrop Android 开发日志
 
+## 2026-07-14 — 社区瀑布流 + 长按菜单 & 稳定性修复
+
+### Code Review 修复（CRITICAL）
+- **RecordingDetailView.kt**: `doc!!` 强制解包 → `val d = doc` 安全调用 + `DisposableEffect` 释放 AgentSession（对标 crash-risk 审计项）
+- **AgentSession.kt**: `mutableListOf` → `ArrayDeque` + `Mutex` 保护编辑队列线程安全
+- **RealtimeSession.kt**: 裸 `Thread` 重连 → `CoroutineScope` + `launch` + `delay`；`disconnect()` 增加 `generation.incrementAndGet()` 防旧 WS 回调
+- **Library.kt**: `articleTitle!!` → 局部 `val title` 安全赋值
+
+### Code Review 修复（MEDIUM）
+- **Networking.kt**: 所有 `get/post/put/delete/patch` 加 `.use {}` 关闭 response body 防连接泄漏
+- **RealtimeInterviewer.kt**: 裸 `Thread`(300ms AI 播放后恢复上行) → `CoroutineScope.launch`
+- **AudioRecorder.kt + VoiceEdit.kt**: `e.printStackTrace()` → `Log.e()`
+- **LibraryStore.kt**: 新增 `release()` 取消 scope
+- **RealtimeInterviewer.kt**: 修复 init/toggleInterview 缩进不一致
+
+### 功能
+- **社区瀑布流** (3 新文件): `CommunityFeedView.kt` (双排 masonry 贪心布局 + 推荐/最新/回应 tab + PhotoCard/TextCard + FeedMetaRow)、`Community.kt` 改用 `/reco/feed` 端点、`Model.kt` 新增 `CommunityFeedResp`
+- **长按操作菜单** (2 新文件): `LongpressMenuOverlay.kt` (自绘覆盖层：暖纸菜单卡 + 二级子菜单导航 + scrim)、`MenuConfig.kt` (硬编码：图片风格 6 项 / 改写 4 项 / 公众号题图 + 拷贝)
+
+### UI / 打磨
+- **LibraryView.kt**: 移除硬编码 "VoiceDrop 口述" / "下拉刷新" → `stringResource()`
+
 ## 2026-07-09 — 上游功能复刻 & 体验打磨
 
 ### 上游 iOS 功能复刻

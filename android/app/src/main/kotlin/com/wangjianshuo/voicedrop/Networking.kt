@@ -73,9 +73,10 @@ class HttpClient(private val auth: AuthStore) {
 
     internal suspend inline fun <reified T> get(path: String): T = withContext(Dispatchers.IO) {
         val request = buildRequest("GET", path)
-        val response = client.newCall(request).execute()
-        val type = object : com.google.gson.reflect.TypeToken<T>() {}.type
-        parseResponse(response, type)
+        client.newCall(request).execute().use { response ->
+            val type = object : com.google.gson.reflect.TypeToken<T>() {}.type
+            parseResponse(response, type)
+        }
     }
 
     suspend fun getRaw(path: String): Response = withContext(Dispatchers.IO) {
@@ -85,16 +86,18 @@ class HttpClient(private val auth: AuthStore) {
 
     internal suspend inline fun <reified T> post(path: String, body: Any? = null): T = withContext(Dispatchers.IO) {
         val request = buildRequest("POST", path, body)
-        val response = client.newCall(request).execute()
-        val type = object : com.google.gson.reflect.TypeToken<T>() {}.type
-        parseResponse(response, type)
+        client.newCall(request).execute().use { response ->
+            val type = object : com.google.gson.reflect.TypeToken<T>() {}.type
+            parseResponse(response, type)
+        }
     }
 
     internal suspend inline fun <reified T> putJson(path: String, body: Any? = null): T = withContext(Dispatchers.IO) {
         val request = buildRequest("PUT", path, body)
-        val response = client.newCall(request).execute()
-        val type = object : com.google.gson.reflect.TypeToken<T>() {}.type
-        parseResponse(response, type)
+        client.newCall(request).execute().use { response ->
+            val type = object : com.google.gson.reflect.TypeToken<T>() {}.type
+            parseResponse(response, type)
+        }
     }
 
     suspend fun put(path: String, body: ByteArray): Response = withContext(Dispatchers.IO) {
@@ -104,16 +107,18 @@ class HttpClient(private val auth: AuthStore) {
 
     internal suspend inline fun <reified T> delete(path: String): T = withContext(Dispatchers.IO) {
         val request = buildRequest("DELETE", path)
-        val response = client.newCall(request).execute()
-        val type = object : com.google.gson.reflect.TypeToken<T>() {}.type
-        parseResponse(response, type)
+        client.newCall(request).execute().use { response ->
+            val type = object : com.google.gson.reflect.TypeToken<T>() {}.type
+            parseResponse(response, type)
+        }
     }
 
     internal suspend inline fun <reified T> patch(path: String, body: Any? = null): T = withContext(Dispatchers.IO) {
         val request = buildRequest("PATCH", path, body)
-        val response = client.newCall(request).execute()
-        val type = object : com.google.gson.reflect.TypeToken<T>() {}.type
-        parseResponse(response, type)
+        client.newCall(request).execute().use { response ->
+            val type = object : com.google.gson.reflect.TypeToken<T>() {}.type
+            parseResponse(response, type)
+        }
     }
 
     fun webSocket(url: String, listener: WebSocketListener): WebSocket {

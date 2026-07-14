@@ -134,7 +134,7 @@ class VoiceEdit(
                 audioRecord = null
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("VoiceEdit", "record failed", e)
             isRecording.set(false)
         }
     }

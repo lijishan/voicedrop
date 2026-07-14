@@ -38,6 +38,9 @@ import androidx.navigation.NavController
 @Composable
 fun LibraryView(navController: NavController) {
     val library = LocalLibraryStore.current
+    val httpClient = LocalHttpClient.current
+    val auth = LocalAuthStore.current
+    val communityStore = remember { CommunityStore(httpClient, auth) }
 
     LaunchedEffect(Unit) { library.smartRefresh() }
     LaunchedEffect(library.selectedTab) { library.smartRefresh() }
@@ -52,7 +55,7 @@ fun LibraryView(navController: NavController) {
                 ) {
                     Icon(Icons.Default.GraphicEq, null, tint = VDTheme.Primary, modifier = Modifier.size(24.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("VoiceDrop 口述", style = VDTheme.Title1.copy(color = VDTheme.TextPrimary), modifier = Modifier.weight(1f))
+                    Text(stringResource(com.wangjianshuo.voicedrop.R.string.app_name), style = VDTheme.Title1.copy(color = VDTheme.TextPrimary), modifier = Modifier.weight(1f))
                     IconButton(onClick = { navController.navigate(Screen.Settings.route) }) {
                         Icon(Icons.Default.Settings, null, tint = VDTheme.TextHint, modifier = Modifier.size(20.dp))
                     }
@@ -73,7 +76,7 @@ fun LibraryView(navController: NavController) {
             HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
                 when (page) {
                     0 -> RecordingList(navController)
-                    1 -> CommunityList(navController)
+                    1 -> CommunityFeedView(communityStore, navController)
                 }
             }
         }
@@ -159,7 +162,7 @@ private fun RecordingList(navController: NavController) {
             Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Text(stringResource(com.wangjianshuo.voicedrop.R.string.no_recordings), style = VDTheme.H2)
                 Spacer(Modifier.height(8.dp))
-                Text("下拉刷新", style = VDTheme.Caption)
+                Text(stringResource(com.wangjianshuo.voicedrop.R.string.pull_to_refresh), style = VDTheme.Caption)
             }
             return@Box
         }

@@ -4,6 +4,7 @@ import android.util.Base64
 import android.util.Log
 import com.google.gson.Gson
 import okhttp3.*
+import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicInteger
 
 class RealtimeSession(
@@ -25,6 +26,7 @@ class RealtimeSession(
     private var generation = AtomicInteger(0)
     private var reconnectAttempt = 0
     private val maxReconnects = 6
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
 
     fun connect() {
         if (webSocket != null) return
@@ -67,15 +69,28 @@ class RealtimeSession(
 
     private fun scheduleReconnect() {
         if (reconnectAttempt >= maxReconnects) { state = State.idle; return }
-        val delay = (1L shl reconnectAttempt) * 1000L
+        val delayMs = (1L shl reconnectAttempt) * 1000L
         reconnectAttempt++
-        Thread { try { Thread.sleep(delay); connect() } catch (_: Exception) {} }.start()
+        scope.launch {
+            try {
+                kotlinx.coroutines.delay(delayMs)
+                if (generation.get() != 0) connect()
+            } catch (e: Exception) {
+                Log.w("RealtimeSession", "reconnect failed", e)
+            }
+        }
     }
 
     fun disconnect() {
+        generation.incrementAndGet()
         webSocket?.close(1000, null)
         webSocket = null
         state = State.idle
+    }
+
+    fun release() {
+        disconnect()
+        scope.cancel()
     }
 
     fun sendAudio(pcm: ByteArray) {

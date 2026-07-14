@@ -135,8 +135,9 @@ class LibraryStore(
                 try {
                     fetchSemaphore.withPermit {
                         val doc: ArticleDoc = httpClient.get("${API.FILES_BASE}/download/articles/$stem.json")
-                        articleTitle = doc.articles.firstOrNull()?.title ?: doc.title
-                        if (articleTitle != null) { titleCache[stem] = articleTitle!!; persistMetaCache() }
+                        val title = doc.articles.firstOrNull()?.title ?: doc.title
+                        if (title != null) { titleCache[stem] = title; persistMetaCache() }
+                        articleTitle = title
                     }
                 } catch (e: Exception) { Log.w("Library", "ignored", e) }
             }
@@ -264,7 +265,11 @@ class LibraryStore(
         return result
     }
 
-    suspend fun triggerMine(stem: String) {
+    suspend     fun triggerMine(stem: String) {
         httpClient.post<Unit>("${API.FILES_BASE}/mine")
+    }
+
+    fun release() {
+        scope.cancel()
     }
 }

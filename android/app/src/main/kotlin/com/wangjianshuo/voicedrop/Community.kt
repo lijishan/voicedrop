@@ -28,21 +28,45 @@ class CommunityStore(
     private val auth: AuthStore,
 ) {
     var posts by mutableStateOf<List<CommunityPost>>(emptyList())
+    var timeOrdered by mutableStateOf<List<CommunityPost>>(emptyList())
     var isRefreshing by mutableStateOf(false)
     var likedShareIds by mutableStateOf<Set<String>>(emptySet())
+    var likeCounts by mutableStateOf<Map<String, Int>>(emptyMap())
+    var replyCounts by mutableStateOf<Map<String, Int>>(emptyMap())
 
     suspend fun refresh() {
         isRefreshing = true
         try {
-            val resp: CommunityListResp = httpClient.get("${API.FILES_BASE}/community/list")
-            posts = resp.posts
-        } catch (e: Exception) { Log.w("Community", "ignored", e) }
+            loadViaFeed()
+        } catch (e: Exception) {
+            Log.w("Community", "feed failed, fallback: ${e.message}")
+            try { loadViaListAndRank() } catch (e2: Exception) { Log.w("Community", "list failed", e2) }
+        }
+        isRefreshing = false
+    }
 
+    private suspend fun loadViaFeed() {
+        val resp: CommunityFeedResp = httpClient.get("${API.RECO_BASE}/feed")
+        posts = resp.posts
+        timeOrdered = resp.posts
+        likeCounts = resp.likes ?: emptyMap()
+        replyCounts = resp.replies ?: emptyMap()
+        likedShareIds = (resp.mineLikes ?: emptyList()).toSet()
+    }
+
+    private suspend fun loadViaListAndRank() {
+        val resp: CommunityListResp = httpClient.get("${API.FILES_BASE}/community/list")
+        posts = resp.posts
+        timeOrdered = resp.posts
         try {
+            val ranked = rank()
+            if (ranked.isNotEmpty()) {
+                val orderMap = ranked.withIndex().associate { it.value to it.index }
+                posts = posts.sortedBy { orderMap[it.shareId] ?: Int.MAX_VALUE }
+            }
             val feed: Map<String, List<String>> = httpClient.post("${API.AGENT_BASE}/feed/state")
             likedShareIds = (feed["liked"] ?: emptyList()).toSet()
-        } catch (e: Exception) { Log.w("Community", "ignored", e) }
-        isRefreshing = false
+        } catch (e: Exception) { Log.w("Community", "rank/feed failed", e) }
     }
 
     suspend fun share(articleKey: String): CommunityPost {

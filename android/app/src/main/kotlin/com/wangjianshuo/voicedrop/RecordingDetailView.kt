@@ -1,5 +1,8 @@
 package com.wangjianshuo.voicedrop
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.util.Log
 import androidx.compose.foundation.layout.*
@@ -13,7 +16,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -43,6 +48,13 @@ fun RecordingDetailView(stem: String, navController: NavController) {
     var shareResultMsg by remember { mutableStateOf("") }
     var showShareResult by remember { mutableStateOf(false) }
 
+    // Long press menu state
+    var menuVisible by remember { mutableStateOf(false) }
+    var menuAnchorY by remember { mutableFloatStateOf(0f) }
+    var menuAnchorX by remember { mutableFloatStateOf(0f) }
+    var menuAnchorWidth by remember { mutableFloatStateOf(0f) }
+    var menuNodes by remember { mutableStateOf<List<MenuNode>>(emptyList()) }
+
     LaunchedEffect(stem) {
         try { doc = library.fetchArticleDoc(stem) } catch (e: Exception) { Log.w("RecordingDetail", "ignored", e) }
         isLoading = false
@@ -50,11 +62,17 @@ fun RecordingDetailView(stem: String, navController: NavController) {
 
     LaunchedEffect(doc) {
         if (doc == null) {
-            while (true) {
+            var retries = 0
+            while (retries < 5) {
                 delay(8_000)
-                try { doc = library.fetchArticleDoc(stem); break } catch (e: Exception) { Log.w("RecordingDetail", "ignored", e) }
+                try { doc = library.fetchArticleDoc(stem); if (doc != null) break } catch (e: Exception) { Log.w("RecordingDetail", "ignored", e) }
+                retries++
             }
         }
+    }
+
+    DisposableEffect(stem) {
+        onDispose { agentSession?.disconnect() }
     }
 
     val title = doc?.articles?.firstOrNull()?.title ?: doc?.title ?: recording?.rowTitle ?: "录音"
@@ -94,9 +112,45 @@ fun RecordingDetailView(stem: String, navController: NavController) {
                             val meta = if (author != null && author.isNotBlank()) "$dateInfo · $author" else dateInfo
                             Text(meta, style = VDTheme.Caption.copy(fontSize = 12.sp), modifier = Modifier.padding(bottom = 16.dp))
                         }
-                        val article = doc!!.articles.firstOrNull()
-                        if (article != null) ArticleBodyView(body = article.body, ownerScope = auth.scope)
-                        else if (doc!!.body != null) ArticleBodyView(body = doc!!.body ?: "", ownerScope = auth.scope)
+                        val d = doc
+                        val article = d?.articles?.firstOrNull()
+                        val body = article?.body ?: d?.body ?: ""
+                        if (d != null && article != null) ArticleBodyView(
+                            body = article.body,
+                            ownerScope = auth.scope,
+                            onTextLongPress = { line, text, offset ->
+                                val quote = text.take(15).replace("\"", "'")
+                                val subs = mapOf("LINE" to line.toString(), "QUOTE" to quote)
+                                menuNodes = MenuConfig.textMenu.map { MenuConfig.fillNode(it, subs) } +
+                                    MenuNode(id = "copy", label = "拷贝", instruction = "COPY:$text")
+                                menuAnchorY = offset.y; menuAnchorX = offset.x
+                                menuAnchorWidth = 200f; menuVisible = true
+                            },
+                            onImageLongPress = { relKey, offset ->
+                                val subs = mapOf("KEY" to relKey)
+                                menuNodes = MenuConfig.imageMenu.map { MenuConfig.fillNode(it, subs) }
+                                menuAnchorY = offset.y; menuAnchorX = offset.x
+                                menuAnchorWidth = 200f; menuVisible = true
+                            },
+                        )
+                        else if (d?.body != null) ArticleBodyView(
+                            body = d.body,
+                            ownerScope = auth.scope,
+                            onTextLongPress = { line, text, offset ->
+                                val quote = text.take(15).replace("\"", "'")
+                                val subs = mapOf("LINE" to line.toString(), "QUOTE" to quote)
+                                menuNodes = MenuConfig.textMenu.map { MenuConfig.fillNode(it, subs) } +
+                                    MenuNode(id = "copy", label = "拷贝", instruction = "COPY:$text")
+                                menuAnchorY = offset.y; menuAnchorX = offset.x
+                                menuAnchorWidth = 200f; menuVisible = true
+                            },
+                            onImageLongPress = { relKey, offset ->
+                                val subs = mapOf("KEY" to relKey)
+                                menuNodes = MenuConfig.imageMenu.map { MenuConfig.fillNode(it, subs) }
+                                menuAnchorY = offset.y; menuAnchorX = offset.x
+                                menuAnchorWidth = 200f; menuVisible = true
+                            },
+                        )
                     }
                 }
                 recording?.isEmpty == true -> { EmptyStateView() }
@@ -158,7 +212,11 @@ fun RecordingDetailView(stem: String, navController: NavController) {
                                 val url = library.shareArticle("articles/$stem.json")
                                 val intent = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, url) }
                                 context.startActivity(Intent.createChooser(intent, "分享文章"))
-                            } catch (_: Exception) {}
+                            } catch (e: Exception) {
+                                Log.w("RecordingDetail", "share link failed", e)
+                                shareResultMsg = "分享失败: ${e.message}"
+                                showShareResult = true
+                            }
                         }
                     }, modifier = Modifier.fillMaxWidth()) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -216,7 +274,31 @@ fun RecordingDetailView(stem: String, navController: NavController) {
             confirmButton = { TextButton(onClick = { showShareResult = false }) { Text("确定") } }
         )
     }
+
+    if (menuVisible) {
+        LongpressMenuOverlay(
+            anchorY = menuAnchorY,
+            anchorX = menuAnchorX,
+            anchorWidth = menuAnchorWidth,
+            config = menuNodes,
+            onPick = { instruction ->
+                menuVisible = false
+                if (instruction.startsWith("COPY:")) {
+                    val text = instruction.removePrefix("COPY:")
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("text", text))
+                } else {
+                    val session = agentSession ?: AgentSession(stem, auth, httpClient)
+                    agentSession = session
+                    if (!session.isConnected) session.connect()
+                    session.enqueue(instruction)
+                }
+            },
+            onDismiss = { menuVisible = false },
+        )
+    }
 }
+
 
 @Composable
 private fun PendingStateView(

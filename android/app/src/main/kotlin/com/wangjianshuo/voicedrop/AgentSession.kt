@@ -6,6 +6,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.google.gson.Gson
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.*
 
 class AgentSession(
@@ -21,7 +23,8 @@ class AgentSession(
 
     private val gson = Gson()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val queue = mutableListOf<EditRequest>()
+    private val queue = ArrayDeque<EditRequest>()
+    private val mutex = kotlinx.coroutines.sync.Mutex()
     private var currentId: String? = null
 
     data class EditRequest(val id: String, val text: String, val articleIndex: Int = 0)
@@ -49,22 +52,27 @@ class AgentSession(
 
     fun enqueue(text: String) {
         val id = "android_${System.currentTimeMillis()}_${(1000..9999).random()}"
-        queue.add(EditRequest(id, text))
-        if (isConnected && !isProcessing) drainQueue()
+        scope.launch {
+            mutex.withLock { queue.add(EditRequest(id, text)) }
+            if (isConnected && !isProcessing) drainQueue()
+        }
     }
 
     private fun drainQueue() {
-        if (queue.isEmpty() || isProcessing) return
-        val next = queue.removeAt(0)
-        currentId = next.id
-        isProcessing = true
-        val msg = mapOf(
-            "type" to "instruct",
-            "id" to next.id,
-            "text" to next.text,
-            "articleIndex" to next.articleIndex.toString(),
-        )
-        webSocket?.send(gson.toJson(msg))
+        scope.launch {
+            val next = mutex.withLock {
+                if (queue.isEmpty() || isProcessing) null else queue.removeFirstOrNull()
+            } ?: return@launch
+            currentId = next.id
+            isProcessing = true
+            val msg = mapOf(
+                "type" to "instruct",
+                "id" to next.id,
+                "text" to next.text,
+                "articleIndex" to next.articleIndex.toString(),
+            )
+            webSocket?.send(gson.toJson(msg))
+        }
     }
 
     private fun handleMessage(text: String) {
@@ -83,7 +91,7 @@ class AgentSession(
                     drainQueue()
                 }
                 "error" -> {
-                    replyText = msg.message ?: "出错了"
+                    replyText = msg.message ?: "编辑出错，请重试"
                     isProcessing = false
                     drainQueue()
                 }
