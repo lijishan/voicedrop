@@ -1,6 +1,20 @@
 # VoiceDrop — project state (read this first)
 
-Last updated: 2026-07-14（键盘精修 v2 已上 main，v1 曾整体 revert）
+Last updated: 2026-07-14（键盘精修 v2 已上 main，v1 曾整体 revert；同日接入 PostHog）
+
+## PostHog 产品分析已接入（2026-07-14，模拟器验证事件已送达）
+
+- SPM 包 `posthog-ios`（project.yml `packages:`，from 3.0.0）；初始化在
+  `Analytics.swift`（`VoiceDropApp.init()` 调用），host = US cloud。
+- **key 链路**：`Secrets.xcconfig` 的 `POSTHOG_API_KEY` → project.yml info
+  properties `PostHogAPIKey: $(POSTHOG_API_KEY)` → Info.plist 构建期替换 →
+  `Bundle.main` 读取。**key 缺失/为空 = PostHog 整体不启用**（guard 直接 return，
+  App 行为不变）。CI 侧 build.yml 重建 Secrets.xcconfig 时从 GitHub secret
+  `POSTHOG_API_KEY`（已 gh secret set）写入——改 Secrets 相关内容记得三处同步：
+  本地 xcconfig / Secrets.example / build.yml。
+- DEBUG build 开 `config.debug`（console 可见每条事件上送日志）；Release 不开。
+- 目前只有 SDK 自动采集（Application Opened/Installed、screen view 等），
+  没有手动 capture 调用；看数据：app.posthog.com → Activity。
 
 ## 键盘精修 v2：长按菜单「编辑」→ 原位编辑（2026-07-14，用户拍板重做后上线）
 

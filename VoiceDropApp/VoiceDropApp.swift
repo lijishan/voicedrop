@@ -6,6 +6,8 @@ struct VoiceDropApp: App {
     // APNs 注册 + device token 上传（「文章已生成」推送 / 运维报警都靠它）。
     @UIApplicationDelegateAdaptor(PushRegistrar.self) private var pushRegistrar
 
+    init() { Analytics.setup() }
+
     var body: some Scene {
         WindowGroup {
             RootView()

@@ -58,7 +58,9 @@ jobs:
         run: brew install xcodegen
 
       - name: Write Secrets.xcconfig
-        run: printf 'FILES_TOKEN = %s\n' "${{ secrets.FILES_TOKEN }}" > Secrets.xcconfig
+        run: |
+          printf 'FILES_TOKEN = %s\n' "${{ secrets.FILES_TOKEN }}" > Secrets.xcconfig
+          printf 'POSTHOG_API_KEY = %s\n' "${{ secrets.POSTHOG_API_KEY }}" >> Secrets.xcconfig
 
       - name: Generate Xcode project
         run: xcodegen generate

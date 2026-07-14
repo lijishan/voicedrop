@@ -6,6 +6,11 @@ options:
   deploymentTarget:
     iOS: "18.0"
 
+packages:
+  PostHog:
+    url: https://github.com/PostHog/posthog-ios
+    from: 3.0.0
+
 targets:
   VoiceDrop:
     type: application
@@ -21,6 +26,8 @@ targets:
       properties:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleDisplayName: VoiceDrop
+        # PostHog project key 从 Secrets.xcconfig 注入（CI 由 build.yml 重建该文件）
+        PostHogAPIKey: "$(POSTHOG_API_KEY)"
         CFBundleURLTypes:
           - CFBundleURLName: com.wangjianshuo.VoiceDrop
             CFBundleURLSchemes:
@@ -63,6 +70,7 @@ targets:
           - group.com.wangjianshuo.VoiceDrop
     dependencies:
       - target: VoiceDropShare
+      - package: PostHog
     scheme:
       testTargets:
         - VoiceDropTests
