@@ -40,3 +40,4 @@ __pycache__/
 
 # Design handoff reference (kept locally, not tracked)
 design_handoff_voicedrop_redesign/
+opencode.jsonc
