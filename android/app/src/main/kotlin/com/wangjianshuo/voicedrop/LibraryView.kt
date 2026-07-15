@@ -8,9 +8,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -25,14 +22,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import androidx.compose.ui.platform.LocalDensity
 import androidx.navigation.NavController
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -136,50 +140,88 @@ private fun TabBar() {
 private fun RecordingList(navController: NavController) {
     val library = LocalLibraryStore.current
     val listState = rememberLazyListState()
-    var pullOffset by remember { mutableFloatStateOf(0f) }
-    var isPulling by remember { mutableStateOf(false) }
-    val animatedOffset by animateFloatAsState(targetValue = pullOffset, animationSpec = spring(dampingRatio = 0.5f), label = "pull")
+    val density = LocalDensity.current
 
-    LaunchedEffect(isPulling) {
-        if (isPulling) { library.refresh(); pullOffset = 0f; isPulling = false }
+    var isRefreshing by remember { mutableStateOf(false) }
+    var pullOffsetPx by remember { mutableFloatStateOf(0f) }
+    val pullThresholdPx = with(density) { 80.dp.toPx() }
+    val pullOffset = with(density) { pullOffsetPx.toDp() }
+
+    val isAtTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+
+    fun triggerRefresh() { if (!isRefreshing) isRefreshing = true }
+
+    val nestedConn = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y > 0f && isAtTop && !isRefreshing) {
+                    pullOffsetPx = (pullOffsetPx + available.y).coerceIn(0f, pullThresholdPx * 1.5f)
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (available.y > 0f && isAtTop && !isRefreshing) {
+                    pullOffsetPx = (pullOffsetPx + available.y).coerceIn(0f, pullThresholdPx * 1.5f)
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+        }
     }
 
-    Box(Modifier.fillMaxSize()
-        .pointerInput(Unit) {
-            detectVerticalDragGestures(
-                onDragStart = { pullOffset = 0f },
-                onVerticalDrag = { _, amount ->
-                    if (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0) {
-                        pullOffset = (pullOffset + amount).coerceIn(0f, 200f)
-                    }
-                },
-                onDragEnd = {
-                    if (pullOffset > 100f) { isPulling = true } else { pullOffset = 0f }
-                },
-                onDragCancel = { pullOffset = 0f },
-            )
+    LaunchedEffect(pullOffsetPx, isRefreshing) {
+        if (!isRefreshing && pullOffsetPx > 0f) {
+            delay(180)
+            if (pullOffsetPx >= pullThresholdPx) triggerRefresh()
+            else pullOffsetPx = 0f
         }
-        .graphicsLayer { translationY = animatedOffset }
-    ) {
-        if (library.recordings.isEmpty() && !library.isRefreshing) {
+    }
+
+    LaunchedEffect(isRefreshing) {
+        if (isRefreshing) {
+            library.refresh()
+            isRefreshing = false
+            pullOffsetPx = 0f
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (pullOffset > 0.dp || isRefreshing) {
+            Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp), contentAlignment = Alignment.TopCenter) {
+                if (isRefreshing) {
+                    CircularProgressIndicator(color = VDTheme.Red, modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+                } else {
+                    CircularProgressIndicator(
+                        progress = { (pullOffsetPx / pullThresholdPx).coerceIn(0f, 1f) },
+                        color = VDTheme.Red, modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+                }
+            }
+        }
+
+        if (library.recordings.isEmpty() && !isRefreshing && pullOffsetPx == 0f) {
             Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Text(stringResource(com.wangjianshuo.voicedrop.R.string.no_recordings), style = VDTheme.H2)
                 Spacer(Modifier.height(8.dp))
                 Text(stringResource(com.wangjianshuo.voicedrop.R.string.pull_to_refresh), style = VDTheme.Caption)
             }
-            return@Box
-        }
-        LazyColumn(
-            state = listState,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(library.recordings, key = { it.audioName }) { recording ->
-                RecordingCard(
-                    recording = recording,
-                    onClick = { navController.navigate(Screen.RecordingDetail.createRoute(recording.stem)) },
-                    onDelete = { library.deleteRecording(recording.audioName) }
-                )
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .nestedScroll(nestedConn)
+                    .offset { IntOffset(0, pullOffsetPx.roundToInt()) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(library.recordings, key = { it.audioName }) { recording ->
+                    RecordingCard(
+                        recording = recording,
+                        onClick = { navController.navigate(Screen.RecordingDetail.createRoute(recording.stem)) },
+                        onDelete = { library.deleteRecording(recording.audioName) }
+                    )
+                }
             }
         }
     }

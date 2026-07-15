@@ -110,11 +110,11 @@ fun CommunityFeedView(store: CommunityStore, navController: NavController) {
             if (pullOffset > 0.dp || isRefreshing) {
                 Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp), contentAlignment = Alignment.TopCenter) {
                     if (isRefreshing) {
-                        CircularProgressIndicator(color = VDTheme.Accent, modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+                        CircularProgressIndicator(color = VDTheme.Red, modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
                     } else {
                         CircularProgressIndicator(
                             progress = { (pullOffsetPx / pullThresholdPx).coerceIn(0f, 1f) },
-                            color = VDTheme.Accent, modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+                            color = VDTheme.Red, modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
                     }
                 }
             }
