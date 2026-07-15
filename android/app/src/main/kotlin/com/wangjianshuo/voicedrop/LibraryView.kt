@@ -43,7 +43,10 @@ fun LibraryView(navController: NavController) {
     val communityStore = remember { CommunityStore(httpClient, auth) }
 
     LaunchedEffect(Unit) { library.smartRefresh() }
-    LaunchedEffect(library.selectedTab) { library.smartRefresh() }
+    LaunchedEffect(library.selectedTab) {
+        library.smartRefresh()
+        if (library.selectedTab == LibraryStore.Tab.COMMUNITY) communityStore.refresh()
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(VDTheme.Background)) {
         Column(modifier = Modifier.fillMaxSize()) {

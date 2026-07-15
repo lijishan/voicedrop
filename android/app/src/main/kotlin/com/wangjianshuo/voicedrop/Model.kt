@@ -237,7 +237,18 @@ data class CommunityFeedResp(
     val mineLikes: List<String>? = null,
 )
 
-// --- API generic responses ---
+// --- Prompt Share ---
+
+data class ShareState(
+    val code: String? = null,
+    val sharing: Boolean = false,
+    val label: String? = null,
+    val instruction: String? = null,
+)
+
+data class ShareStatesResponse(
+    val byItem: Map<String, ShareState>? = null,
+)
 
 data class ApiError(
     val error: String,

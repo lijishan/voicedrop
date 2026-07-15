@@ -1,5 +1,21 @@
 # VoiceDrop Android 开发日志
 
+## 2026-07-15 — 下拉刷新 + App 图标 & 多项打磨
+
+### 下拉刷新（瀑布流）
+- **CommunityFeedView.kt**: `nestedScroll(nestedConn)` 挂在 LazyColumn 上，`onPreScroll` + `onPostScroll` 在 `listState` 顶部下拉时捕获 `available.y > 0`，累积 pullOffsetPx → `Modifier.offset` 推动内容下移 + 顶部 `CircularProgressIndicator` 按进度增长 → 松手 80dp 阈值触发 `store.refresh()`
+
+### 社区详情页修复
+- **Community.kt**: `CommunityPostView` 添加 `Scaffold` + `TopAppBar`（回退按钮 + 状态栏安全区）+ `verticalScroll` 可滚动阅读；移除旧的 `CommunityList`（已由 CommunityFeedView 替代）
+
+### App 图标
+- 从 iOS `icon-1024.png` 生成各密度 mipmap + 自适应图标（红底 + iOS 图标前景）
+
+### 提示词分享码
+- **Model.kt**: 新增 `ShareState` / `ShareStatesResponse`
+- **LibraryStore.kt**: 新增 `fetchShareStates()` / `setSharing()` API
+- **SettingsView.kt**: 新增「提示词分享」卡 — Toggle 开关 + 7 位码 + 链接 + 复制/分享
+
 ## 2026-07-14 — 社区瀑布流 + 长按菜单 & 稳定性修复
 
 ### Code Review 修复（CRITICAL）

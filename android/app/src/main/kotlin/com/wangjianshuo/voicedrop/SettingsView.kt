@@ -1,5 +1,9 @@
 
 package com.wangjianshuo.voicedrop
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import android.util.Log
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,6 +20,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
 import androidx.navigation.NavController
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -25,6 +30,7 @@ fun SettingsView(navController: NavController) {
     val auth = app.auth
     val library = app.library
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     var name by remember { mutableStateOf(auth.name ?: "") }
     var nameSaved by remember { mutableStateOf(false) }
@@ -37,6 +43,14 @@ fun SettingsView(navController: NavController) {
     var wechatSecret by remember { mutableStateOf(auth.wechatSecret ?: "") }
     var wechatSaved by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
+
+    // Prompt share
+    var shareStates by remember { mutableStateOf<Map<String, ShareState>>(emptyMap()) }
+    var shareToggling by remember { mutableStateOf(false) }
+    var shareError by remember { mutableStateOf<String?>(null) }
+    var codeCopied by remember { mutableStateOf(false) }
+    var linkCopied by remember { mutableStateOf(false) }
+    val shareItemID = "default"
 
     LaunchedEffect(Unit) {
         // try server sync, but only overwrite local cache if server returns data
@@ -51,6 +65,10 @@ fun SettingsView(navController: NavController) {
         try {
             val styleDoc = library.fetchStyle()
             styleText = (styleDoc?.versions?.lastOrNull()?.styleText) ?: (styleDoc?.style) ?: ""
+        } catch (e: Exception) { Log.w("Settings", "ignored", e) }
+        try {
+            val resp = library.fetchShareStates()
+            shareStates = resp.byItem ?: emptyMap()
         } catch (e: Exception) { Log.w("Settings", "ignored", e) }
         isLoading = false
     }
@@ -117,6 +135,95 @@ fun SettingsView(navController: NavController) {
                         Spacer(Modifier.height(8.dp))
                         TextButton(onClick = { showStyleEditor = true }) {
                             Text(stringResource(com.wangjianshuo.voicedrop.R.string.edit_style), style = VDTheme.Button)
+                        }
+                    }
+                }
+
+                // Prompt Share
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(containerColor = VDTheme.CardBg),
+                ) {
+                    val shareState = shareStates[shareItemID]
+                    val sharing = shareState?.sharing ?: false
+                    val code = shareState?.code
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("提示词分享", style = VDTheme.Body.copy(fontWeight = FontWeight.Medium))
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    if (sharing) "分享中，关闭后分享码立即失效"
+                                    else "开启后，任何人对 VoiceDrop 说出分享码，或打开链接，就能看到并一次性使用这条提示词",
+                                    style = VDTheme.Caption,
+                                )
+                            }
+                            if (shareToggling) {
+                                CircularProgressIndicator(color = VDTheme.Accent, modifier = Modifier.size(24.dp).padding(end = 8.dp))
+                            } else {
+                                Switch(
+                                    checked = sharing,
+                                    onCheckedChange = { on ->
+                                        shareError = null
+                                        shareToggling = true
+                                        scope.launch {
+                                            val err = library.setSharing(shareItemID, on)
+                                            shareError = err
+                                            shareToggling = false
+                                            if (err == null) {
+                                                try {
+                                                    val resp = library.fetchShareStates()
+                                                    shareStates = resp.byItem ?: emptyMap()
+                                                } catch (e: Exception) { Log.w("Settings", "ignored", e) }
+                                            }
+                                        }
+                                    },
+                                    colors = SwitchDefaults.colors(checkedTrackColor = VDTheme.Accent),
+                                )
+                            }
+                        }
+                        if (shareError != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(shareError ?: "", style = VDTheme.Caption.copy(color = VDTheme.Accent))
+                        }
+                        if (sharing && code != null) {
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                code,
+                                style = VDTheme.H1.copy(fontSize = 34.sp, fontWeight = FontWeight.Bold, letterSpacing = 6.sp),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text("voicedrop.cn/$code", style = VDTheme.Caption)
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("code", code))
+                                    codeCopied = true
+                                    scope.launch { delay(1800); codeCopied = false }
+                                }) {
+                                    Text(if (codeCopied) "已复制" else "复制数字", style = VDTheme.Button)
+                                }
+                                TextButton(onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("link", "https://voicedrop.cn/$code"))
+                                    linkCopied = true
+                                    scope.launch { delay(1800); linkCopied = false }
+                                }) {
+                                    Text(if (linkCopied) "已复制" else "复制链接", style = VDTheme.Button)
+                                }
+                                TextButton(onClick = {
+                                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_TEXT, "https://voicedrop.cn/$code")
+                                    }
+                                    context.startActivity(Intent.createChooser(sendIntent, "分享提示词"))
+                                }) {
+                                    Text("分享", style = VDTheme.Button)
+                                }
+                            }
                         }
                     }
                 }

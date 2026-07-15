@@ -265,8 +265,26 @@ class LibraryStore(
         return result
     }
 
-    suspend     fun triggerMine(stem: String) {
+    suspend fun triggerMine(stem: String) {
         httpClient.post<Unit>("${API.FILES_BASE}/mine")
+    }
+
+    suspend fun fetchShareStates(): ShareStatesResponse {
+        return httpClient.get("${API.AGENT_BASE}/prompt-shares")
+    }
+
+    suspend fun setSharing(id: String, on: Boolean): String? {
+        return try {
+            if (on) {
+                httpClient.post<Map<String, Any>>("${API.AGENT_BASE}/prompt-share", mapOf("id" to id))
+            } else {
+                httpClient.delete<Unit>("${API.AGENT_BASE}/prompt-share/$id")
+            }
+            null
+        } catch (e: Exception) {
+            val msg = e.message ?: "error"
+            if (msg.contains("429")) "今天生成分享码的次数已达上限，明天再试" else "操作失败，请重试"
+        }
     }
 
     fun release() {
