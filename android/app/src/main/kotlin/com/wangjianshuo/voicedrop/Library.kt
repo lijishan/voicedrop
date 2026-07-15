@@ -43,7 +43,7 @@ class LibraryStore(
         cachePrefs.edit().putString("titles", gson.toJson(titleCache)).apply()
     }
 
-    fun smartRefresh() {
+    suspend fun smartRefresh() {
         if (recordings.isEmpty()) refresh()
     }
 
@@ -63,38 +63,36 @@ class LibraryStore(
         }
     }
 
-    fun refresh() {
-        scope.launch {
-            isRefreshing = true
+    suspend fun refresh() {
+        isRefreshing = true
+        try {
+            val merged = withContext(Dispatchers.IO) { loadLocalRecordings() }.toMutableList()
+            this@LibraryStore.recordings = merged.sortedByDescending { it.audioName }
+
             try {
-                val merged = loadLocalRecordings().toMutableList()
-                this@LibraryStore.recordings = merged.sortedByDescending { it.audioName }
-
-                try {
-                    val serverRecordings = loadServerRecordings()
-                    for (server in serverRecordings) {
-                        val idx = merged.indexOfFirst { it.audioName == server.audioName }
-                        if (idx >= 0) {
-                            merged[idx] = merged[idx].copy(
-                                uploaded = true,
-                                hasArticles = server.hasArticles,
-                                isEmpty = server.isEmpty,
-                                articleTitle = server.articleTitle,
-                            )
-                        } else {
-                            merged.add(server)
-                        }
+                val serverRecordings = withContext(Dispatchers.IO) { loadServerRecordings() }
+                for (server in serverRecordings) {
+                    val idx = merged.indexOfFirst { it.audioName == server.audioName }
+                    if (idx >= 0) {
+                        merged[idx] = merged[idx].copy(
+                            uploaded = true,
+                            hasArticles = server.hasArticles,
+                            isEmpty = server.isEmpty,
+                            articleTitle = server.articleTitle,
+                        )
+                    } else {
+                        merged.add(server)
                     }
-                } catch (e: Exception) {
-                    Log.w("Library", "server sync failed: ${e.message}")
                 }
-
-                this@LibraryStore.recordings = merged.sortedByDescending { it.audioName }
             } catch (e: Exception) {
-                Log.e("Library", "refresh error: ${e.message}")
-            } finally {
-                isRefreshing = false
+                Log.w("Library", "server sync failed: ${e.message}")
             }
+
+            this@LibraryStore.recordings = merged.sortedByDescending { it.audioName }
+        } catch (e: Exception) {
+            Log.e("Library", "refresh error: ${e.message}")
+        } finally {
+            isRefreshing = false
         }
     }
 
