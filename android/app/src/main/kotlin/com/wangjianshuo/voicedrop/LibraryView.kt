@@ -32,33 +32,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
-
-private fun Modifier.onPullRelease(
-    pullOffsetPx: Float,
-    thresholdPx: Float,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit,
-    onReset: () -> Unit,
-): Modifier = this.pointerInput(Unit) {
-    awaitPointerEventScope {
-        var wasPressed = false
-        while (true) {
-            val event = awaitPointerEvent(PointerEventPass.Initial)
-            val anyPressed = event.changes.any { it.pressed }
-            if (wasPressed && !anyPressed) {
-                if (!isRefreshing && pullOffsetPx >= thresholdPx) onRefresh()
-                else if (pullOffsetPx > 0f) onReset()
-            }
-            wasPressed = anyPressed
-        }
-    }
-}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -192,6 +170,14 @@ private fun RecordingList(navController: NavController) {
         }
     }
 
+    LaunchedEffect(pullOffsetPx, isRefreshing) {
+        if (!isRefreshing && pullOffsetPx > 0f) {
+            delay(180)
+            if (pullOffsetPx >= pullThresholdPx) triggerRefresh()
+            else pullOffsetPx = 0f
+        }
+    }
+
     LaunchedEffect(isRefreshing) {
         if (isRefreshing) {
             library.refresh()
@@ -220,33 +206,21 @@ private fun RecordingList(navController: NavController) {
                 Text(stringResource(com.wangjianshuo.voicedrop.R.string.pull_to_refresh), style = VDTheme.Caption)
             }
         } else {
-            Box(
+            LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
-                    .onPullRelease(
-                        pullOffsetPx = pullOffsetPx,
-                        thresholdPx = pullThresholdPx,
-                        isRefreshing = isRefreshing,
-                        onRefresh = { triggerRefresh() },
-                        onReset = { pullOffsetPx = 0f },
-                    ),
+                    .nestedScroll(nestedConn)
+                    .offset { IntOffset(0, pullOffsetPx.roundToInt()) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .nestedScroll(nestedConn)
-                        .offset { IntOffset(0, pullOffsetPx.roundToInt()) }
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(library.recordings, key = { it.audioName }) { recording ->
-                        RecordingCard(
-                            recording = recording,
-                            onClick = { navController.navigate(Screen.RecordingDetail.createRoute(recording.stem)) },
-                            onDelete = { library.deleteRecording(recording.audioName) }
-                        )
-                    }
+                items(library.recordings, key = { it.audioName }) { recording ->
+                    RecordingCard(
+                        recording = recording,
+                        onClick = { navController.navigate(Screen.RecordingDetail.createRoute(recording.stem)) },
+                        onDelete = { library.deleteRecording(recording.audioName) }
+                    )
                 }
             }
         }

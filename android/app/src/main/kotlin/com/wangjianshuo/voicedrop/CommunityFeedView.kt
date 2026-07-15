@@ -38,31 +38,8 @@ import kotlinx.coroutines.delay
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.PointerEventPass
 
-enum class FeedTab { RECO, LATEST, REPLIES }
-
-private fun Modifier.onPullRelease(
-    pullOffsetPx: Float,
-    thresholdPx: Float,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit,
-    onReset: () -> Unit,
-): Modifier = this.pointerInput(Unit) {
-    awaitPointerEventScope {
-        var wasPressed = false
-        while (true) {
-            val event = awaitPointerEvent(PointerEventPass.Initial)
-            val anyPressed = event.changes.any { it.pressed }
-            if (wasPressed && !anyPressed) {
-                if (!isRefreshing && pullOffsetPx >= thresholdPx) onRefresh()
-                else if (pullOffsetPx > 0f) onReset()
-            }
-            wasPressed = anyPressed
-        }
-    }
-}
+private enum class FeedTab { RECO, LATEST, REPLIES }
 private data class CardItem(val post: CommunityPost, val width: Float)
 
 @Composable
@@ -98,6 +75,15 @@ fun CommunityFeedView(store: CommunityStore, navController: NavController) {
                 }
                 return Offset.Zero
             }
+        }
+    }
+
+    // Detect release via debounce
+    LaunchedEffect(pullOffsetPx, isRefreshing) {
+        if (!isRefreshing && pullOffsetPx > 0f) {
+            delay(180)
+            if (pullOffsetPx >= pullThresholdPx) triggerRefresh()
+            else pullOffsetPx = 0f
         }
     }
 
@@ -142,45 +128,33 @@ fun CommunityFeedView(store: CommunityStore, navController: NavController) {
                     val colWidthDp = (maxWidth - 9.dp) / 2
                     val (leftCards, rightCards) = remember(posts, colWidthDp) { split(posts, colWidthDp) }
 
-                    // Box detects finger release WITHOUT consuming events (PointerEventPass.Initial)
-                    Box(
+                    // nestedScroll ON LazyColumn (not on parent Box)
+                    LazyColumn(
+                        state = listState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .onPullRelease(
-                                pullOffsetPx = pullOffsetPx,
-                                thresholdPx = pullThresholdPx,
-                                isRefreshing = isRefreshing,
-                                onRefresh = { triggerRefresh() },
-                                onReset = { pullOffsetPx = 0f },
-                            ),
+                            .nestedScroll(nestedConn)
+                            .offset { IntOffset(0, pullOffsetPx.roundToInt()) }
+                            .padding(horizontal = 12.dp),
                     ) {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .nestedScroll(nestedConn)
-                                .offset { IntOffset(0, pullOffsetPx.roundToInt()) }
-                                .padding(horizontal = 12.dp),
-                        ) {
-                                items(leftCards.size.coerceAtLeast(rightCards.size)) { i ->
-                                    Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.Top) {
-                                        if (i < leftCards.size) {
-                                            FeedCard(post = leftCards[i].post, store = store, widthDp = colWidthDp) {
-                                                navController.navigate(Screen.CommunityPost.createRoute(leftCards[i].post.shareId))
-                                            }
-                                        } else { Spacer(Modifier.width(colWidthDp)) }
-                                        if (i < rightCards.size) {
-                                            FeedCard(post = rightCards[i].post, store = store, widthDp = colWidthDp) {
-                                                navController.navigate(Screen.CommunityPost.createRoute(rightCards[i].post.shareId))
-                                            }
-                                        } else { Spacer(Modifier.width(colWidthDp)) }
-                                    }
-                                    Spacer(Modifier.height(9.dp))
+                            items(leftCards.size.coerceAtLeast(rightCards.size)) { i ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.Top) {
+                                    if (i < leftCards.size) {
+                                        FeedCard(post = leftCards[i].post, store = store, widthDp = colWidthDp) {
+                                            navController.navigate(Screen.CommunityPost.createRoute(leftCards[i].post.shareId))
+                                        }
+                                    } else { Spacer(Modifier.width(colWidthDp)) }
+                                    if (i < rightCards.size) {
+                                        FeedCard(post = rightCards[i].post, store = store, widthDp = colWidthDp) {
+                                            navController.navigate(Screen.CommunityPost.createRoute(rightCards[i].post.shareId))
+                                        }
+                                    } else { Spacer(Modifier.width(colWidthDp)) }
                                 }
+                                Spacer(Modifier.height(9.dp))
+                            }
                         }
                     }
                 }
-            }
             }
         }
     }
